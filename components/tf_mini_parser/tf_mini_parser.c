@@ -15,6 +15,10 @@ static const uint16_t AMB_LIGHT_SAT_DISTANCE = 0xFFFCu;
 static const uint16_t LOW_STRENGTH_THRESHOLD = 100u;
 static const uint16_t SAT_STRENGTH_THRESHOLD = 0xFFFFu;
 
+// Umbrales de temperatura de operación.
+static const uint16_t OP_TEMPERATURE_MIN_C = 0u;
+static const uint16_t OP_TEMPERATURE_MAX_C = 70u;
+
 typedef struct {
     uart_port_t uart_port;
     TaskHandle_t task_handle;
@@ -148,6 +152,8 @@ esp_err_t tf_mini_parser_deinit(tf_mini_handle_t handle)
 
 /**
  * Tarea de FreeRTOS que recibe los datos de UART.
+ * 
+ * TODO: Enviar comandos por UART Tx para configurar el sensor.
  */
 void tf_mini_parser_task(void * pvParameters)
 {
@@ -310,6 +316,11 @@ tf_mini_df_t * parse_tf_mini_df(const uint8_t * const header, const uint8_t * co
                 {
                     // Saturación a causa de la luz en el entorno.
                     parsed_df->event_id = TF_MINI_ERR_AMB_LIGHT_SATURATION;
+                }
+                else if (OP_TEMPERATURE_MIN_C > parsed_df->temperature_deg_c || OP_TEMPERATURE_MAX_C < parsed_df->temperature_deg_c)
+                {
+                    // La temperatura del sensor está fuera del rango de operación.
+                    parsed_df->event_id = TF_MINI_ERR_TEMPERATURE;
                 }
             }
             else

@@ -13,6 +13,7 @@ typedef enum _tf_mini_event_id_t {
     TF_MINI_ERR_LOW_STRENGTH,
     TF_MINI_ERR_STRENGTH_SATURATION,
     TF_MINI_ERR_AMB_LIGHT_SATURATION,
+    TF_MINI_ERR_TEMPERATURE,
     TF_MINI_ERR_MAX,
 } tf_mini_event_id_t;
 

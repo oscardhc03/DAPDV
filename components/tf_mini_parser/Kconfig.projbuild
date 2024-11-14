@@ -1,0 +1,22 @@
+menu "TF Mini parser"
+    config TF_MINI_PARSER_BUFFER_SIZE
+        int
+        default 256
+        prompt "UART Rx buffer size (bytes)"
+        help
+            Set the size of the Rx ring buffer that receives the data frames.
+
+    config TF_MINI_PARSER_TASK_STACK_DEPTH
+        int
+        default 2048 
+        prompt "Parser task stack depth (words)"
+        help
+            Set the stack depth of the FreeRTOS parser task.
+
+    config TF_MINI_PARSER_TASK_PRIORITY
+        int 
+        default 5
+        prompt "Parser task priority"
+        help
+            Set the priority of the parser task.
+endmenu

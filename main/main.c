@@ -6,6 +6,9 @@
 
 #include <esp_log.h>
 
+#include <driver/gpio.h>
+
+#include "gps.h"
 #include "tf_mini_parser.h"
 
 static const char * const TAG = "MAIN";
@@ -16,7 +19,20 @@ static const uint16_t TF_MINI_DIST_MAX_CM = 1200u;
 
 static const uint8_t DIST_SENSOR_VALID_FG = 0x01u;
 
+static const gps_config_t gps_config = {
+    .uart = {
+        .port = UART_NUM_1,
+        .bit_rate = 9600,
+        .rx_pin = GPIO_NUM_17,
+        .word_length = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+    },
+    .event_queue_length = 20,
+};
+
 static QueueHandle_t tf_mini_data_queue;
+static QueueHandle_t gps_event_queue;
 
 static void test_consumer_task(void * pvParameters);
 
@@ -25,6 +41,7 @@ void app_main(void)
     esp_err_t status;
     BaseType_t result;
     tf_mini_handle_t tf_mini_handle;
+    gps_handle_t gps_handle;
     tf_mini_parser_config_t tf_mini_cfg;
 
     status = ESP_OK;
@@ -46,7 +63,7 @@ void app_main(void)
             .uart = {
                 .port = UART_NUM_2,
                 .bit_rate = 115200,
-                .rx_pin = 16,
+                .rx_pin = GPIO_NUM_16,
                 .word_length = UART_DATA_8_BITS,
                 .parity = UART_PARITY_DISABLE,
                 .stop_bits = UART_STOP_BITS_1,
@@ -64,6 +81,20 @@ void app_main(void)
         else
         {
             ESP_LOGE(TAG, "TF MINI parser init error (%s)", esp_err_to_name(status));
+        }
+    }
+
+    if (ESP_OK == status)
+    {
+        status = gps_init(&gps_config, &gps_handle, &gps_event_queue);
+
+        if (ESP_OK == status && NULL != gps_event_queue)
+        {
+            ESP_LOGI(TAG, "GPS event parser init OK");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "GPS parser init error (%s)", esp_err_to_name(status));
         }
     }
 
@@ -87,12 +118,18 @@ void test_consumer_task(void * pvParameters)
 {
     BaseType_t queue_result;
     tf_mini_df_t * data_frame;
+    gps_event_t gps_event;
+    gps_position_t * gps_position;
+    gps_speed_t * gps_speed;
     uint8_t valid_data_frames;
 
-    while (1)
+    gps_position = NULL;
+    gps_speed = NULL;
+
+    while (NULL != tf_mini_data_queue && NULL != gps_event_queue)
     {
         valid_data_frames = 0u;
-        queue_result = xQueueReceive(tf_mini_data_queue, (void *) &data_frame, (TickType_t) pdMS_TO_TICKS(100));
+        queue_result = xQueueReceive(tf_mini_data_queue, (void *) &data_frame, pdMS_TO_TICKS(100));
     
         if (pdPASS == queue_result && NULL != data_frame)
         {
@@ -134,6 +171,29 @@ void test_consumer_task(void * pvParameters)
             ESP_LOGE(TAG, "TF mini NO DATA");
         }
 
+        queue_result = xQueueReceive(gps_event_queue, (void *) &gps_event, pdMS_TO_TICKS(10));
+
+        if (pdPASS == queue_result && NULL != gps_event.data)
+        {
+            if (GPS_EVENT_POSITION == gps_event.id)
+            {
+                gps_position = (gps_position_t *) gps_event.data;
+                ESP_LOGI(
+                    TAG, 
+                    "GPS position { lat = %f, lon = %f, satellites = %hhu, alt = %f}", 
+                    gps_position->latitude,
+                    gps_position->longitude,
+                    gps_position->num_satellites,
+                    gps_position->altitude
+                );
+            }
+            else if (GPS_EVENT_SPEED == gps_event.id)
+            {
+                gps_speed = (gps_speed_t *) gps_event.data;
+                ESP_LOGI(TAG, "GPS ground speed = %f", gps_speed->ground_speed);
+            }
+        }
+
         if (DIST_SENSOR_VALID_FG & valid_data_frames)
         {
             ESP_LOGI(TAG, "TF mini DF { dist = %hu cm, strength = %hu, temp = %.2f deg C}", data_frame->distance_cm, data_frame->signal_strength, data_frame->temperature_deg_c);
@@ -142,6 +202,19 @@ void test_consumer_task(void * pvParameters)
         if (NULL != data_frame)
         {
             free(data_frame);
+            data_frame = NULL;
+        }
+
+        if (NULL != gps_position)
+        {
+            free(gps_position);
+            gps_position = NULL;
+        }
+
+        if (NULL != gps_speed)
+        {
+            free(gps_speed);
+            gps_speed = NULL;
         }
 
         data_frame = NULL;

@@ -1,0 +1,29 @@
+menu "GPS (NMEA) parser"
+    config GPS_PARSER_BUFFER_SIZE
+        int
+        default 256
+        prompt "UART Rx buffer size (bytes)"
+        help
+            Set the size of the Rx ring buffer that receives the data frames.
+
+    config GPS_PARSER_EVENT_QUEUE_LENGTH
+        int
+        default 5
+        prompt "GPS data event queue length"
+        help
+            Set the maximum number of GPS data events held by the data queue. 
+
+    config GPS_PARSER_TASK_STACK_DEPTH
+        int
+        default 2048 
+        prompt "Parser task stack depth (words)"
+        help
+            Set the stack depth of the FreeRTOS GPS parser task.
+
+    config GPS_PARSER_TASK_PRIORITY
+        int 
+        default 5
+        prompt "Parser task priority"
+        help
+            Set the priority of the GPS parser task.
+endmenu

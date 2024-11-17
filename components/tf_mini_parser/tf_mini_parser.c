@@ -59,7 +59,6 @@ esp_err_t tf_mini_parser_init(tf_mini_handle_t * const out_tf_min_handle, const 
         }
         else
         {
-            free(tf_mini);
             status = ESP_ERR_NO_MEM;
         }
     }

@@ -34,8 +34,8 @@ static const char NMEA_START_OF_STATEMENT = '$';
 static const char NMEA_ITEM_SEPARATOR = ',';
 static const char NMEA_END_OF_STATEMENT = '\r';
 
-static const float KNOTS_TO_METERS_PER_SECOND = 1.852f;
-static const float KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND = 3.6f;
+static const float KNOTS_TO_METERS_PER_SECOND = _IQ23(1.852f);
+static const float KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND = _IQ23(3.6f);
 
 /**
  * Declaraciones de funciones internas del componente.
@@ -44,7 +44,7 @@ static void gps_parser_task(void * pvParameters);
 
 static void handle_end_of_line(gps_t * const gps);
 static esp_err_t gps_line_decode(gps_t * const gps);
-static float parse_coordinate(const uint8_t * const item_str);
+static _iq16 parse_coordinate(const uint8_t * const item_str);
 
 /**
  * Definiciones de funciones públicas.
@@ -310,7 +310,7 @@ esp_err_t gps_line_decode(gps_t * const gps)
                 case 3:
                     if ('S' == gps->item_str[0] || 's' == gps->item_str[0])
                     {
-                        gps_position_data->latitude *= -1.0f;
+                        gps_position_data->latitude = _IQ16mpy(gps_position_data->latitude, _IQ16(-1));
                     }
                     break;
                 case 4:
@@ -319,14 +319,14 @@ esp_err_t gps_line_decode(gps_t * const gps)
                 case 5:
                     if ('W' == gps->item_str[0] || 'w' == gps->item_str[0])
                     {
-                        gps_position_data->longitude *= -1.0f;
+                        gps_position_data->longitude = _IQ16mpy(gps_position_data->longitude, _IQ16(-1));
                     }
                     break;
                 case 7:
                     gps_position_data->num_satellites = (uint8_t) strtol((const char *) gps->item_str, NULL, 10);
                     break;
                 case 9:
-                    gps_position_data->altitude = strtof((const char *) gps->item_str, NULL);
+                    gps_position_data->altitude = _atoIQ18((const char *) gps->item_str);
                     break;
                 default:
                     break;
@@ -336,10 +336,10 @@ esp_err_t gps_line_decode(gps_t * const gps)
                 switch (gps->item_number)
                 {
                 case 5:
-                    gps_speed_data->ground_speed = strtof((const char *) gps->item_str, NULL) * KNOTS_TO_METERS_PER_SECOND;
+                    gps_speed_data->ground_speed = _IQ23div(_atoIQ23((const char *) gps->item_str), KNOTS_TO_METERS_PER_SECOND);
                     break;
                 case 7:
-                    gps_speed_data->ground_speed = strtof((const char *) gps->item_str, NULL) / KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND;
+                    gps_speed_data->ground_speed = _IQ23div(_atoIQ23((const char *) gps->item_str), KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND);
                     break;
                 default:
                     break;
@@ -390,18 +390,17 @@ esp_err_t gps_line_decode(gps_t * const gps)
     return status;
 }
 
-float parse_coordinate(const uint8_t * const item_str)
+_iq16 parse_coordinate(const uint8_t * const item_str)
 {
-    float coordinate;
-    int degrees;
-    float minutes;
+    _iq16 coordinate;
+    _iq16 degrees;
+    _iq16 minutes;
 
-    coordinate = strtof((char *) item_str, NULL);
-    degrees = ((int) coordinate) / 100;
-    minutes = coordinate - ((float) (degrees * 100));
-    coordinate = ((float) degrees) + (minutes / 60.0f);
+    ESP_LOGI(TAG, "%s", item_str);
+    coordinate = _atoIQ16((char *) item_str);
+    degrees = _IQ16(_IQ16int(_IQ16div(coordinate, _IQ16(100.0f))));
+    minutes = coordinate - _IQ16mpy(degrees, _IQ16(100.0f));
+    coordinate = degrees + _IQ16div(minutes, _IQ16(60.0f)); // 20.666657, 103.422001
 
     return coordinate;
 }
-
-// 10 * (digit_char[0] - '0') + (digit_char[1] - '0');

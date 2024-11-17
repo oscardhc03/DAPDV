@@ -1,0 +1,22 @@
+dependencies:
+  espressif/iqmath:
+    component_hash: 407d5bc3fd358a73d2b09982918ab508b4e804cc547942c5979d226be86b7e75
+    dependencies:
+    - name: idf
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.11.0
+  idf:
+    source:
+      type: idf
+    version: 5.2.3
+direct_dependencies:
+- espressif/iqmath
+- idf
+manifest_hash: 3107d45cef7b6bf7a345201df5d85f8835187becf0666dbbd84d9e0d84d06bc4
+target: esp32
+version: 2.0.0

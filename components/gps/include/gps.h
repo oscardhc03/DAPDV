@@ -14,15 +14,17 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
+#include <IQmathLib.h>
+
 typedef struct _gps_position_t {
-    float latitude;
-    float longitude;
-    float altitude;
+    _iq16 latitude;
+    _iq16 longitude;
+    _iq18 altitude;
     uint8_t num_satellites;
 } gps_position_t;
 
 typedef struct _gps_speed_t {
-    float ground_speed;
+    _iq23 ground_speed;
 } gps_speed_t;
 
 typedef enum _gps_event_id_t {

@@ -1,12 +1,14 @@
 #include <stdio.h>
 
+#include <esp_log.h>
+
+#include <driver/gpio.h>
+
 #include <freertos/FreeRTOS.h>
 // #include <freertos/task.h>
 #include <freertos/queue.h>
 
-#include <esp_log.h>
-
-#include <driver/gpio.h>
+#include <IQmathLib.h>
 
 #include "gps.h"
 #include "tf_mini_parser.h"
@@ -122,6 +124,9 @@ void test_consumer_task(void * pvParameters)
     gps_position_t * gps_position;
     gps_speed_t * gps_speed;
     uint8_t valid_data_frames;
+    char lat_str[16];
+    char lon_str[16];
+    char alt_str[16];
 
     gps_position = NULL;
     gps_speed = NULL;
@@ -178,19 +183,25 @@ void test_consumer_task(void * pvParameters)
             if (GPS_EVENT_POSITION == gps_event.id)
             {
                 gps_position = (gps_position_t *) gps_event.data;
+
+                _IQ16toa(lat_str, "%3.6f", gps_position->latitude);
+                _IQ16toa(lon_str, "%5.6f", gps_position->longitude);
+                _IQ18toa(alt_str, "%4.6f", gps_position->altitude);
+
                 ESP_LOGI(
                     TAG, 
-                    "GPS position { lat = %f, lon = %f, satellites = %hhu, alt = %f}", 
-                    gps_position->latitude,
-                    gps_position->longitude,
+                    "GPS position { lat = %s, lon = %s, satellites = %hhu, alt = %s}", 
+                    lat_str,
+                    lon_str,
                     gps_position->num_satellites,
-                    gps_position->altitude
+                    alt_str
                 );
             }
             else if (GPS_EVENT_SPEED == gps_event.id)
             {
                 gps_speed = (gps_speed_t *) gps_event.data;
-                ESP_LOGI(TAG, "GPS ground speed = %f", gps_speed->ground_speed);
+                 _IQ23toa(alt_str, "%3.6f", gps_speed->ground_speed);
+                ESP_LOGI(TAG, "GPS ground speed = %s", alt_str);
             }
         }
 

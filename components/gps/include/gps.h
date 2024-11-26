@@ -1,8 +1,9 @@
 #ifndef GPS_H_
 #define GPS_H_
 
-#include <stdlib.h> 
+#include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include <esp_err.h>
 #include <esp_log.h>
@@ -14,18 +15,26 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
-#include <IQmathLib.h>
-
 typedef struct _gps_position_t {
-    _iq16 latitude;
-    _iq16 longitude;
-    _iq18 altitude;
-    uint8_t num_satellites;
+    float latitude;
+    float longitude;
+    uint16_t altitude;
 } gps_position_t;
 
+typedef struct _gps_positioning_data_t {
+    gps_position_t position;
+    uint8_t num_satellites;
+} gps_positioning_data_t;
+
 typedef struct _gps_speed_t {
-    _iq23 ground_speed;
+    float course_degrees;
+    float ground_speed;
 } gps_speed_t;
+
+typedef struct _gps_route_t {
+    gps_position_t * waypoints;
+    uint32_t waypoint_count;
+} gps_route_t;
 
 typedef enum _gps_event_id_t {
     GPS_EVENT_NONE,
@@ -67,5 +76,9 @@ typedef void * gps_handle_t;
 esp_err_t gps_init(const gps_config_t * const config, gps_handle_t * const out_gps_handle, QueueHandle_t * const out_data_queue_handle);
 
 esp_err_t gps_deinit(const gps_handle_t gps_handle);
+
+float distance_in_meters_between_positions(const gps_position_t * const position_a, const gps_position_t * const position_b);
+
+void get_position_intersecting_line(const gps_position_t * const point, const gps_position_t * const a, const gps_position_t * const b, gps_position_t * const out_intersecting_position);
 
 #endif /* GPS_H_ */

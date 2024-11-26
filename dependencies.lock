@@ -17,6 +17,6 @@ dependencies:
 direct_dependencies:
 - espressif/iqmath
 - idf
-manifest_hash: 3107d45cef7b6bf7a345201df5d85f8835187becf0666dbbd84d9e0d84d06bc4
+manifest_hash: 9814209e2a8bc7ec904b8b35ea498ff3e939f4605117769e041a56ef80874eab
 target: esp32
 version: 2.0.0

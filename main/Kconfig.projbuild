@@ -1,0 +1,50 @@
+menu "Main"
+    config FEEDBACK_EVENT_QUEUE_LENGTH
+        int
+        default 10
+        prompt "User feedback event queue length (items)"
+        help
+            Set the maximum number of feedback events that the queue can hold.
+        
+    config NAV_SEL_INPUT_PIN
+        int
+        default 24
+        prompt "GPIO for navigation route selection"
+        help
+            GPIO number connected to button used to select the navigation route.
+            
+    config NAV_SAFE_AREA_RADIUS_CM
+        int
+        default 140
+        prompt "Navigation safe area radius (cm)"
+        help
+            Distance from waypoint that is considered inside boundaries (centimeters).
+
+    config NAV_COORDINATE_PRECISION
+        int
+        default 10
+        prompt "Coordinate precision"
+        help
+            If the latitude and longitude of two coordinates both differ by less than the coordinate precision, consider them equal.
+
+    config NAV_WAYPOINT_VISIT_DISTANCE_CM
+        int
+        default 100
+        prompt "Navigation waypoint visit distance (cm)"
+        help
+            Distance from waypoint that navigation considers as a visit (centimeters).
+
+    config NAV_NOTIFY_BEFORE_WAYPOINT_DISTANCE_CM
+        int
+        default 300
+        prompt "Distance from waypoint where navigation notifies the user (cm)"
+        help
+            How far from the waypoint should navigation notify the user of the next action (centimeters).
+
+    config NAV_FEEDBACK_POST_TIMEOUT_MS
+        int
+        default 1000
+        prompt "Maximum wait for posting a navigation feedback event (ms)"
+        help
+            How much time should the navigation task wait for the feedback event queue to have free space.        
+endmenu

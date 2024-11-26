@@ -34,8 +34,12 @@ static const char NMEA_START_OF_STATEMENT = '$';
 static const char NMEA_ITEM_SEPARATOR = ',';
 static const char NMEA_END_OF_STATEMENT = '\r';
 
-static const float KNOTS_TO_METERS_PER_SECOND = _IQ23(1.852f);
-static const float KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND = _IQ23(3.6f);
+static const float KNOTS_TO_METERS_PER_SECOND = 1.852f;
+static const float KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND = 3.6f;
+
+static const float EARTH_EQUATORIAL_RADIUS_M = 6378137.0f;
+static const float DEGREES_TO_RADIANS = 0.017453292f;
+static const float DEGREES_TO_RADIANS_OVER_TWO = 0.008726646f;
 
 /**
  * Declaraciones de funciones internas del componente.
@@ -44,7 +48,7 @@ static void gps_parser_task(void * pvParameters);
 
 static void handle_end_of_line(gps_t * const gps);
 static esp_err_t gps_line_decode(gps_t * const gps);
-static _iq16 parse_coordinate(const uint8_t * const item_str);
+static float parse_coordinate(const uint8_t * const item_str);
 
 /**
  * Definiciones de funciones públicas.
@@ -165,6 +169,53 @@ esp_err_t gps_deinit(const gps_handle_t gps_handle)
     return ESP_FAIL;
 }
 
+float distance_in_meters_between_positions(const gps_position_t * const position_a, const gps_position_t * const position_b)
+{
+    float a;
+    float b;
+
+    a = sinf((position_a->latitude - position_b->latitude) * DEGREES_TO_RADIANS_OVER_TWO);
+    b = sinf((position_a->longitude - position_b->longitude) * DEGREES_TO_RADIANS_OVER_TWO);
+
+    a = (a * a) + (b * b * cosf(position_a->latitude * DEGREES_TO_RADIANS) * cosf(position_b->latitude * DEGREES_TO_RADIANS));
+    b = EARTH_EQUATORIAL_RADIUS_M * 2.0f * atan2f(sqrt(a), sqrt(1 - a));
+
+    return b;
+}
+
+void get_position_intersecting_line(const gps_position_t * const point, const gps_position_t * const a, const gps_position_t * const b,  gps_position_t * const out_intersecting_position)
+{
+    float line_vector_magnitude;
+    float normalized_distance;
+    float x;
+    float y;
+
+    // Componentes del vector AB.
+    x = b->longitude - a->longitude;
+    y = b->latitude - a->latitude;
+
+    line_vector_magnitude = x * x + y * y;
+    // Producto punto de los vectores AB y AP, normalizado con la magnitud de AB.
+    normalized_distance = (x * (point->longitude - a->longitude) + y * (point->latitude - a->latitude)) / line_vector_magnitude;
+
+    if (0.0f > normalized_distance)
+    {
+        *out_intersecting_position = *a;
+    }
+    else if (1.0f < normalized_distance)
+    {
+        *out_intersecting_position = *b;
+    }
+    else
+    {
+        *out_intersecting_position = (gps_position_t) {
+            .latitude = a->latitude + y * normalized_distance,
+            .longitude = a->longitude + x * normalized_distance,
+            .altitude = point->altitude
+        };
+    }
+}
+
 void gps_parser_task(void * pvParameters) 
 {
     esp_err_t status;
@@ -247,16 +298,18 @@ esp_err_t gps_line_decode(gps_t * const gps)
 {
     esp_err_t status;
     gps_event_t gps_event;
-    gps_position_t * gps_position_data;
+    gps_positioning_data_t * gps_positioning_data;
     gps_speed_t * gps_speed_data;
     BaseType_t event_result;
+    BaseType_t has_non_empty_item;
     gps_statement_t statement;
     const uint8_t * cursor;
 
     cursor = gps->line_buffer;
     status = ESP_OK;
     statement = GPS_STATEMENT_UNKNOWN;
-    gps_position_data = NULL;
+    has_non_empty_item = pdFALSE;
+    gps_positioning_data = NULL;
     gps_speed_data = NULL;
 
     while (*cursor && ESP_OK == status)
@@ -264,6 +317,7 @@ esp_err_t gps_line_decode(gps_t * const gps)
         if (NMEA_START_OF_STATEMENT == *cursor)
         {
             statement = GPS_STATEMENT_UNKNOWN;
+            has_non_empty_item = pdFALSE;
             gps->item_index = 0u;
             gps->item_number = 0u;
             gps->item_str[0] = '\0';
@@ -276,9 +330,9 @@ esp_err_t gps_line_decode(gps_t * const gps)
                 if (0 == strcmp(STATEMENT_GGA_STR, (const char *) gps->item_str))
                 {
                     statement = GPS_STATEMENT_GGA;
-                    gps_position_data = (gps_position_t *) malloc(sizeof(gps_position_t));
+                    gps_positioning_data = (gps_positioning_data_t *) malloc(sizeof(gps_positioning_data_t));
 
-                    if (NULL == gps_position_data)
+                    if (NULL == gps_positioning_data)
                     {
                         ESP_LOGE(TAG, "Position data allocation error (ESP_ERR_NO_MEM)");
                         status = ESP_ERR_NO_MEM;
@@ -293,7 +347,7 @@ esp_err_t gps_line_decode(gps_t * const gps)
                     {
                         ESP_LOGE(TAG, "Speed data allocation error (ESP_ERR_NO_MEM)");
                         status = ESP_ERR_NO_MEM;
-                    } 
+                    }
                 }
                 else 
                 {
@@ -305,28 +359,34 @@ esp_err_t gps_line_decode(gps_t * const gps)
                 switch (gps->item_number)
                 {
                 case 2:
-                    gps_position_data->latitude = parse_coordinate(gps->item_str);
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    gps_positioning_data->position.latitude = parse_coordinate(gps->item_str);
                     break;
                 case 3:
-                    if ('S' == gps->item_str[0] || 's' == gps->item_str[0])
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    if (0 < gps->item_index && ('S' == gps->item_str[0] || 's' == gps->item_str[0]))
                     {
-                        gps_position_data->latitude = _IQ16mpy(gps_position_data->latitude, _IQ16(-1));
+                        gps_positioning_data->position.latitude *= -1.0f;
                     }
                     break;
                 case 4:
-                    gps_position_data->longitude = parse_coordinate(gps->item_str);
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    gps_positioning_data->position.longitude = parse_coordinate(gps->item_str);
                     break;
                 case 5:
-                    if ('W' == gps->item_str[0] || 'w' == gps->item_str[0])
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    if (0 < gps->item_index && ('W' == gps->item_str[0] || 'w' == gps->item_str[0]))
                     {
-                        gps_position_data->longitude = _IQ16mpy(gps_position_data->longitude, _IQ16(-1));
+                        gps_positioning_data->position.longitude *= -1.0f;
                     }
                     break;
                 case 7:
-                    gps_position_data->num_satellites = (uint8_t) strtol((const char *) gps->item_str, NULL, 10);
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    gps_positioning_data->num_satellites = (uint8_t) strtol((const char *) gps->item_str, NULL, 10);
                     break;
                 case 9:
-                    gps_position_data->altitude = _atoIQ18((const char *) gps->item_str);
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    gps_positioning_data->position.altitude = (uint16_t) strtof((const char *) gps->item_str, NULL);
                     break;
                 default:
                     break;
@@ -335,11 +395,27 @@ esp_err_t gps_line_decode(gps_t * const gps)
             case GPS_STATEMENT_VTG:
                 switch (gps->item_number)
                 {
+                case 1:
+                case 3:
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    if (0 < gps->item_index)
+                    {
+                        gps_speed_data->course_degrees = strtof((const char *) gps->item_str, NULL);
+                    } 
+                    break;
                 case 5:
-                    gps_speed_data->ground_speed = _IQ23div(_atoIQ23((const char *) gps->item_str), KNOTS_TO_METERS_PER_SECOND);
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    if (0 < gps->item_index)
+                    {
+                        gps_speed_data->ground_speed = strtof((const char *) gps->item_str, NULL) / KNOTS_TO_METERS_PER_SECOND;
+                    }
                     break;
                 case 7:
-                    gps_speed_data->ground_speed = _IQ23div(_atoIQ23((const char *) gps->item_str), KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND);
+                    has_non_empty_item = (0 < gps->item_index) ? pdTRUE : has_non_empty_item;
+                    if (0 < gps->item_index)
+                    {
+                        gps_speed_data->ground_speed = strtof((const char *) gps->item_str, NULL) / KILOMETERS_PER_SECOND_TO_METERS_PER_SECOND;
+                    }
                     break;
                 default:
                     break;
@@ -354,15 +430,18 @@ esp_err_t gps_line_decode(gps_t * const gps)
         else if (NMEA_END_OF_STATEMENT == *cursor)
         {
             gps_event.id = GPS_EVENT_NONE;
-            if (GPS_STATEMENT_GGA == statement && NULL != gps_position_data)
+            if (pdTRUE == has_non_empty_item)
             {
-                gps_event.id = GPS_EVENT_POSITION;
-                gps_event.data = (void *) gps_position_data;
-            }
-            else if (GPS_STATEMENT_VTG == statement && NULL != gps_speed_data)
-            {
-                gps_event.id = GPS_EVENT_SPEED;
-                gps_event.data = (void *) gps_speed_data;
+                if (GPS_STATEMENT_GGA == statement && NULL != gps_positioning_data)
+                {
+                    gps_event.id = GPS_EVENT_POSITION;
+                    gps_event.data = (void *) gps_positioning_data;
+                }
+                else if (GPS_STATEMENT_VTG == statement && NULL != gps_speed_data)
+                {
+                    gps_event.id = GPS_EVENT_SPEED;
+                    gps_event.data = (void *) gps_speed_data;
+                }
             }
 
             if (GPS_EVENT_NONE != gps_event.id)
@@ -390,17 +469,16 @@ esp_err_t gps_line_decode(gps_t * const gps)
     return status;
 }
 
-_iq16 parse_coordinate(const uint8_t * const item_str)
+float parse_coordinate(const uint8_t * const item_str)
 {
-    _iq16 coordinate;
-    _iq16 degrees;
-    _iq16 minutes;
+    float coordinate;
+    float minutes;
+    uint16_t degrees;
 
-    ESP_LOGI(TAG, "%s", item_str);
-    coordinate = _atoIQ16((char *) item_str);
-    degrees = _IQ16(_IQ16int(_IQ16div(coordinate, _IQ16(100.0f))));
-    minutes = coordinate - _IQ16mpy(degrees, _IQ16(100.0f));
-    coordinate = degrees + _IQ16div(minutes, _IQ16(60.0f)); // 20.666657, 103.422001
+    coordinate = strtof((const char *) item_str, NULL);
+    degrees = ((uint16_t) coordinate) / 100u;
+    minutes = coordinate - (degrees * 100.0f);
+    coordinate = ((float) degrees) + minutes / 60.0f;
 
     return coordinate;
 }

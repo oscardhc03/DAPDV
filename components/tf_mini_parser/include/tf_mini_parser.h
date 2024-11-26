@@ -8,6 +8,8 @@
 #include <driver/gpio.h>
 #include <driver/uart.h>
 
+#include <IQmathLib.h>
+
 typedef enum _tf_mini_event_id_t {
     TF_MINI_OK,
     TF_MINI_ERR_LOW_STRENGTH,
@@ -18,9 +20,9 @@ typedef enum _tf_mini_event_id_t {
 } tf_mini_event_id_t;
 
 typedef struct _tf_mini_df_t {
-    uint16_t distance_cm;               /*!< Distancia detectada en centímetros. */
+    _iq15 distance_meters;              /*!< Distancia detectada en metros, con precisión de 0.01 m. */
     uint16_t signal_strength;           /*!< Fuerza de la señal detectada. Si está fuera de rango, distance_cm tiene valor anormal. */
-    float temperature_deg_c;            /*!< Temperatura interna del sensor en grados celsius. */
+    _iq15 temperature_deg_c;            /*!< Temperatura interna del sensor en grados celsius. */
     tf_mini_event_id_t event_id;        /*!< Clasificación del dataframe según los valores de los campos. */
 } tf_mini_df_t;
 

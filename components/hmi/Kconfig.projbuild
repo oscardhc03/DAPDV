@@ -1,0 +1,8 @@
+menu "Main"
+    config HMI_FEEDBACK_EVENT_QUEUE_LENGTH
+        int
+        default 10
+        prompt "Feedback event queue length"
+        help
+            Maximum number of events that the feedback event queue can hold at a time.
+endmenu

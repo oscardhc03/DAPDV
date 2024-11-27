@@ -319,7 +319,7 @@ tf_mini_df_t * parse_tf_mini_df(const uint8_t * const header, const uint8_t * co
                     // Saturación a causa de la luz en el entorno.
                     parsed_df->event_id = TF_MINI_ERR_AMB_LIGHT_SATURATION;
                 }
-                else if (OP_TEMPERATURE_MIN_C > parsed_df->temperature_deg_c || OP_TEMPERATURE_MAX_C < parsed_df->temperature_deg_c)
+                else if (OP_TEMPERATURE_MIN_C >= parsed_df->temperature_deg_c || OP_TEMPERATURE_MAX_C <= parsed_df->temperature_deg_c)
                 {
                     // La temperatura del sensor está fuera del rango de operación.
                     parsed_df->event_id = TF_MINI_ERR_TEMPERATURE;

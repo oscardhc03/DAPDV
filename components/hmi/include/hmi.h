@@ -3,7 +3,18 @@
 
 #include <stdint.h>
 
+#include <esp_err.h>
+#include <esp_log.h>
 
+#include <driver/gpio.h>
+#include <driver/ledc.h>
+
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+/**
+ * Public structures and enumerations.
+ */
 typedef enum _feedback_priority_t {
     FEEDBACK_PRIORITY_LOW,
     FEEDBACK_PRIORITY_NORMAL,
@@ -33,9 +44,30 @@ typedef enum _feedback_source_t {
 } feedback_source_t;
 
 typedef struct _feedback_event_t {
-    feedback_event_id_t id;
-    feedback_source_t source;
-    feedback_priority_t priority;
+    feedback_event_id_t id;             /*!< Identificador del tipo de evento de retroalimentación al usuario. */
+    feedback_source_t source;           /*!< Fuente que origina el evento de retroalimentación. */
+    feedback_priority_t priority;       /*!< Prioridad (LOW, NORMAL, HIGH) del evento. */
 } feedback_event_t;
+
+/**
+ * @brief Inicializa los botones y el buzzer del HMI.
+ * 
+ * @return ESP_OK - HMI fue inicializada correctamente.
+ *         Cualquier otro valor - Error durante la inicialización de HMI.
+ */
+esp_err_t hmi_init(void);
+
+
+/**
+ * @brief Activa el buzzer siguiendo la secuencia de tonos correspondiente al tipo de evento.
+ * 
+ * @note Esta función bloquea la tarea de FreeRTOS que la invoca.
+ * 
+ * @param event_id Identificador del evento que selecciona la secuencia.
+ * @param tiemout_ticks El número máximo de ticks que espera a que el buzzer esté libre.
+ * 
+ * @return ESP_OK si la secuencia se reprodució correctamente.
+ */
+esp_err_t hmi_buzzer_play_feedback_sequence(feedback_event_id_t event_id, TickType_t timeout_ticks);
 
 #endif /* HMI_H_ */

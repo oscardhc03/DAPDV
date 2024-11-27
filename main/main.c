@@ -124,39 +124,57 @@ void app_main(void)
 void hmi_task(void * pvParameters)
 {
     static const TickType_t FEEDBACK_RECEIVE_TIMEOUT_TICKS = pdMS_TO_TICKS(1000u);
+    static const TickType_t BUZZER_CONTROL_TIMEOUT_TICKS = pdMS_TO_TICKS(100u);
 
     BaseType_t result;
+    esp_err_t status;
     feedback_event_t * feedback_event;
 
-    if (NULL == feedback_event_queue)
+    status = ESP_OK;
+
+    if (ESP_OK == status)
     {
-        ESP_LOGE(TAG, "HMI task feedback event queue not initialized");
+        status = hmi_init();
+        ESP_LOGI(TAG, "hmi init status (%s)", esp_err_to_name(status));
+    }
+
+    if (ESP_OK != status)
+    {
+        ESP_LOGE(TAG, "HMI task initialization error (%s)", esp_err_to_name(status));
         vTaskDelete(NULL);
     }
 
     while (1)
     {
-        result = xQueueReceive(feedback_event_queue, (void * const) &feedback_event, FEEDBACK_RECEIVE_TIMEOUT_TICKS);
-
-        if (pdTRUE == result)
+        if (NULL != feedback_event_queue)
         {
-            if (NULL != feedback_event)
+            result = xQueueReceive(feedback_event_queue, (void * const) &feedback_event, FEEDBACK_RECEIVE_TIMEOUT_TICKS);
+
+            if (pdTRUE == result)
             {
-                ESP_LOGI(TAG, "HMI feedback event - ID = %hhu, src = %hhu, priority = %hhu", (uint8_t) feedback_event->id, (uint8_t) feedback_event->source, (uint8_t) feedback_event->priority);
+                if (NULL != feedback_event)
+                {
+                    ESP_LOGI(TAG, "HMI feedback event - ID = %hhu, src = %hhu, priority = %hhu", (uint8_t) feedback_event->id, (uint8_t) feedback_event->source, (uint8_t) feedback_event->priority);
 
-                //TODO: Drive feedback device according to feedback event.
+                    status = hmi_buzzer_play_feedback_sequence(feedback_event->id, BUZZER_CONTROL_TIMEOUT_TICKS);
 
-                free(feedback_event);
-                feedback_event = NULL;
+                    if (ESP_OK != status)
+                    {
+                        ESP_LOGE(TAG, "Buzzer control error (%s)", esp_err_to_name(status));
+                    }
+
+                    free(feedback_event);
+                    feedback_event = NULL;
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "HMI task received feedback event with no payload");
+                }
             }
             else
             {
-                ESP_LOGW(TAG, "HMI task received feedback event with no payload");
+                ESP_LOGD(TAG, "HMI task received no feedback events");
             }
-        }
-        else
-        {
-            ESP_LOGD(TAG, "HMI task received no feedback events");
         }
     }
 

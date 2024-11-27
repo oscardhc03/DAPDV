@@ -23,6 +23,7 @@ static const char * const TAG = "MAIN";
 
 static const UBaseType_t TF_MINI_DATA_QUEUE_LEN = 20;
 
+static const BaseType_t PROXIMITY_SENSOR_ERROR = LONG_MAX;
 static const UBaseType_t PROXIMITY_UPDATE_QUEUE_LEN = 3;
 static const int8_t PROXIMITY_RANGE_INTERVAL_COUNT = 9;
 
@@ -42,6 +43,8 @@ static tf_mini_parser_config_t distance_sensor_config = (tf_mini_parser_config_t
 static void distance_sensor_task(void * pvParameters);
 static void proximity_task(void * pvParameters);
 static void hmi_task(void * pvParameters);
+
+static esp_err_t feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks);
 
 static QueueHandle_t feedback_event_queue;
 
@@ -163,6 +166,7 @@ void hmi_task(void * pvParameters)
 void proximity_task(void * pvParameters)
 {
     static const TickType_t RECEIVE_RANGE_UPDATE_TIMEOUT = pdMS_TO_TICKS(100);
+    static const TickType_t SEND_FEEDBACK_EVENT_TIMEOUT_TICKS = pdMS_TO_TICKS(10);
     static const _iq15 FAR_COLLISION_ALERT_DISTANCE_M = _IQ15(1.0f);
     static const _iq15 NEAR_COLLISION_ALERT_DISTANCE_M = _IQ15(0.5f);
 
@@ -175,8 +179,6 @@ void proximity_task(void * pvParameters)
     esp_err_t status;
     BaseType_t queue_result;
     UBaseType_t notify_level;
-
-    feedback_event_t * feedback_event;
 
     status = ESP_OK;
     cursor = 4u;
@@ -231,77 +233,57 @@ void proximity_task(void * pvParameters)
             free(proximity_range_update);
             proximity_range_update = NULL;
 
-            if (FAR_COLLISION_ALERT_DISTANCE_M >= proximity_range[4])
+            if (PROXIMITY_SENSOR_ERROR != proximity_range[cursor])
             {
-                if (NEAR_COLLISION_ALERT_DISTANCE_M >= proximity_range[4])
+                if (FAR_COLLISION_ALERT_DISTANCE_M >= proximity_range[cursor])
                 {
-                    if (2u > notify_level)
+                    if (NEAR_COLLISION_ALERT_DISTANCE_M >= proximity_range[cursor])
                     {
-                        feedback_event = (feedback_event_t *) malloc(sizeof(feedback_event_t));
-
-                        if (NULL != feedback_event)
+                        if (2u > notify_level)
                         {
-                            *feedback_event = (feedback_event_t) {
-                                .id = FEEDBACK_EVENT_STOP,
-                                .source = FEEDBACK_SOURCE_PROXIMITY,
-                                .priority = FEEDBACK_PRIORITY_HIGH,
-                            };
+                            status = feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_HIGH, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
 
-                            queue_result = xQueueSendToBack(feedback_event_queue, (void *) &feedback_event, pdMS_TO_TICKS(100));
-                            feedback_event = NULL;
-
-                            if (pdTRUE == queue_result)
+                            if (ESP_OK == status)
                             {
                                 notify_level = 2u;
                             }
                             else
                             {
-                                ESP_LOGW(TAG, "Proximity feedback not sent (QUEUE_FULL)");
+                                ESP_LOGW(TAG, "Send feedback event fail (%s)", esp_err_to_name(status));
                             }
                         }
-                        else
-                        {
-                            ESP_LOGW(TAG, "Proximity feedback event allocation fail (ESP_ERR_NO_MEM)");
-                        }
                     }
-                }
-                else if (2u == notify_level)
-                {
-                    notify_level = 1u;
-                }
-                else if (1u > notify_level)
-                {
-                    feedback_event = (feedback_event_t *) malloc(sizeof(feedback_event_t));
-
-                    if (NULL != feedback_event)
+                    else if (2u == notify_level)
                     {
-                        *feedback_event = (feedback_event_t) {
-                            .id = FEEDBACK_EVENT_STOP,
-                            .source = FEEDBACK_SOURCE_PROXIMITY,
-                            .priority = FEEDBACK_PRIORITY_NORMAL,
-                        };
+                        notify_level = 1u;
+                    }
+                    else if (1u > notify_level)
+                    {
+                        status = feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
 
-                        queue_result = xQueueSendToBack(feedback_event_queue, (void *) &feedback_event, pdMS_TO_TICKS(100));
-                        feedback_event = NULL;
-
-                        if (pdTRUE == queue_result)
+                        if (ESP_OK == status)
                         {
                             notify_level = 1u;
                         }
                         else
                         {
-                            ESP_LOGW(TAG, "Proximity feedback not sent (QUEUE_FULL)");
+                            ESP_LOGW(TAG, "Send feedback event fail (%s)", esp_err_to_name(status));
                         }
                     }
-                    else
-                    {
-                        ESP_LOGW(TAG, "Proximity feedback event allocation fail (ESP_ERR_NO_MEM)");
-                    }
+                }
+                else
+                {
+                    notify_level = 0u;
                 }
             }
             else
             {
-                notify_level = 0u;
+                status = feedback_event_send(FEEDBACK_EVENT_SENSOR_ERROR, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
+
+                if (ESP_OK != status)
+                {
+                    ESP_LOGW(TAG, "Send feedback event fail (%s)", esp_err_to_name(status));
+                }
             }
         }
     }
@@ -325,7 +307,9 @@ void distance_sensor_task(void * pvParameters)
 
     tf_mini_handle_t tf_mini_handle;
     tf_mini_df_t * data_frame;
+    _iq15 previous_distance_meters;
     uint8_t valid_data_frames;
+    uint8_t previous_valid_data_frames;
 
     proximity_range_update_t * proximity_range_update;
     
@@ -366,6 +350,9 @@ void distance_sensor_task(void * pvParameters)
         ESP_LOGE(TAG, "Distance sensor task initialization failed (%s)", esp_err_to_name(status));
         vTaskDelete(NULL);
     }
+
+    previous_distance_meters = _IQ15(0);
+    previous_valid_data_frames = 0u;
 
     while (1)
     {
@@ -423,21 +410,39 @@ void distance_sensor_task(void * pvParameters)
             }
 
             //TODO: Only send update when one of these conditions is met: 1) change of distance 2) change of angle 3) sensor error.
-            proximity_range_update = (proximity_range_update_t *) malloc(sizeof(proximity_range_update_t));
-
-            if (NULL != proximity_range_update)
+            if (previous_distance_meters != data_frame->distance_meters || previous_valid_data_frames != valid_data_frames)
             {
-                *proximity_range_update = (proximity_range_update_t) {
-                    .index_change = 0,
-                    .distance_meters = data_frame->distance_meters,
-                };
+                proximity_range_update = (proximity_range_update_t *) malloc(sizeof(proximity_range_update_t));
 
-                queue_result = xQueueSendToBack(proximity_range_update_queue, (void *) &proximity_range_update, SEND_PROXIMITY_UPDATE_TIMEOUT_TICKS);
-                proximity_range_update = NULL;
-
-                if (pdFAIL == queue_result)
+                if (NULL != proximity_range_update)
                 {
-                    ESP_LOGW(TAG, "Send proximity update fail (QUEUE_FULL)");
+                    proximity_range_update->index_change = 0;
+
+                    if (DIST_SENSOR_VALID_FG & valid_data_frames)
+                    {
+                        proximity_range_update->distance_meters = data_frame->distance_meters;
+                    }
+                    else
+                    {
+                        proximity_range_update->distance_meters = (_iq15) PROXIMITY_SENSOR_ERROR;
+                    }
+
+                    queue_result = xQueueSendToBack(proximity_range_update_queue, (void *) &proximity_range_update, SEND_PROXIMITY_UPDATE_TIMEOUT_TICKS);
+                    proximity_range_update = NULL;
+
+                    if (pdPASS == queue_result)
+                    {
+                        previous_distance_meters = data_frame->distance_meters;
+                        previous_valid_data_frames = valid_data_frames;
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "Send proximity update fail (QUEUE_FULL)");
+                    }
+                }
+                else
+                {
+                    ESP_LOGW(TAG,"Proximity range update allocation error (ESP_ERR_NO_MEM)");
                 }
             }
         }
@@ -450,4 +455,48 @@ void distance_sensor_task(void * pvParameters)
     }
 
     vTaskDelete(NULL);
+}
+
+esp_err_t feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks)
+{
+    esp_err_t status;
+    BaseType_t result;
+    feedback_event_t * feedback_event;
+
+    if (NULL != feedback_event_queue)
+    {
+        status = ESP_OK;
+    }
+    else
+    {
+        status = ESP_ERR_INVALID_STATE;
+    }
+
+    if (status == ESP_OK)
+    {
+        feedback_event = (feedback_event_t *) malloc(sizeof(feedback_event_t));
+
+        if (NULL == feedback_event)
+        {
+            status = ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (ESP_OK == status)
+    {
+        *feedback_event = (feedback_event_t) {
+            .id = event_id,
+            .source = source,
+            .priority = priority,
+        };
+
+        result = xQueueSendToBack(feedback_event_queue, (void *) &feedback_event, timeout_ticks);
+
+        if (pdFAIL == result)
+        {
+            status = ESP_FAIL;
+        }
+    }
+
+    return status;
 }

@@ -16,8 +16,8 @@ static const uint16_t LOW_STRENGTH_THRESHOLD = 100u;
 static const uint16_t SAT_STRENGTH_THRESHOLD = 0xFFFFu;
 
 // Umbrales de temperatura de operación.
-static const uint16_t OP_TEMPERATURE_MIN_C = 0u;
-static const uint16_t OP_TEMPERATURE_MAX_C = 70u;
+static const _iq15 OP_TEMPERATURE_MIN_C = _IQ15(-20.0f);
+static const _iq15 OP_TEMPERATURE_MAX_C = _IQ15(60.0f);
 
 typedef struct {
     uart_port_t uart_port;
@@ -273,6 +273,7 @@ void tf_mini_parser_task(void * pvParameters)
 tf_mini_df_t * parse_tf_mini_df(const uint8_t * const header, const uint8_t * const buf)
 {
     tf_mini_df_t * parsed_df;
+    uint16_t distance_cm;
     uint8_t i;
     uint8_t checksum;
 
@@ -294,30 +295,31 @@ tf_mini_df_t * parse_tf_mini_df(const uint8_t * const header, const uint8_t * co
 
             if (NULL != parsed_df)
             {
+                distance_cm = (((uint16_t) buf[1]) << 8u) | (uint16_t) buf[0];
                 *parsed_df = (tf_mini_df_t) {
-                    .distance_cm = (((uint16_t) buf[1]) << 8u) | (uint16_t) buf[0],
+                    .distance_meters = _IQ15div(_IQ15(distance_cm), _IQ15(100)),
                     .signal_strength = (((uint16_t) buf[3]) << 8u) | (uint16_t) buf[2],
-                    .temperature_deg_c = (((((uint16_t) buf[5]) << 8u) | (uint16_t) buf[4]) / 8) - 256,
+                    .temperature_deg_c = _IQ15((((((uint16_t) buf[5]) << 8u) | (uint16_t) buf[4]) / 8) - 256),
                     .event_id = TF_MINI_OK,
                 };
 
                 // Identificar si alguno de los valores es anormal.
-                if (LOW_STRENGTH_DISTANCE == parsed_df->distance_cm || LOW_STRENGTH_THRESHOLD > parsed_df->signal_strength)
+                if (LOW_STRENGTH_DISTANCE == distance_cm || LOW_STRENGTH_THRESHOLD > parsed_df->signal_strength)
                 {
                     // La fuerza de la señal es baja.
                     parsed_df->event_id = TF_MINI_ERR_LOW_STRENGTH;
                 }
-                else if (SAT_STRENGTH_DISTANCE == parsed_df->distance_cm || SAT_STRENGTH_THRESHOLD == parsed_df->signal_strength)
+                else if (SAT_STRENGTH_DISTANCE == distance_cm || SAT_STRENGTH_THRESHOLD == parsed_df->signal_strength)
                 {
                     // Fuerza de la señal está saturada.
                     parsed_df->event_id = TF_MINI_ERR_STRENGTH_SATURATION;
                 }
-                else if (AMB_LIGHT_SAT_DISTANCE == parsed_df->distance_cm)
+                else if (AMB_LIGHT_SAT_DISTANCE == distance_cm)
                 {
                     // Saturación a causa de la luz en el entorno.
                     parsed_df->event_id = TF_MINI_ERR_AMB_LIGHT_SATURATION;
                 }
-                else if (OP_TEMPERATURE_MIN_C > parsed_df->temperature_deg_c || OP_TEMPERATURE_MAX_C < parsed_df->temperature_deg_c)
+                else if (OP_TEMPERATURE_MIN_C >= parsed_df->temperature_deg_c || OP_TEMPERATURE_MAX_C <= parsed_df->temperature_deg_c)
                 {
                     // La temperatura del sensor está fuera del rango de operación.
                     parsed_df->event_id = TF_MINI_ERR_TEMPERATURE;

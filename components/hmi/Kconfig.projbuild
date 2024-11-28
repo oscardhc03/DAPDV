@@ -1,0 +1,22 @@
+menu "HMI"
+    config HMI_FEEDBACK_EVENT_QUEUE_LENGTH
+        int
+        default 10
+        prompt "Feedback event queue length"
+        help
+            Maximum number of events that the feedback event queue can hold at a time.
+
+    config HMI_BUZZER_PIN_NUMBER
+        int
+        default 23
+        prompt "Buzzer digital output GPIO number"
+        help
+            GPIO number of the pin connected to the buzzer output.
+            
+    config HMI_POWER_BUTTON_PIN_NUMBER
+        int
+        default 34
+        prompt "Button input GPIO number"
+        help
+            GPIO number of the pin connected to the power on/off button input.
+endmenu

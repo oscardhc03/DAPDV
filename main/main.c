@@ -14,6 +14,7 @@
 #include "hmi.h"
 #include "tf_mini_parser.h"
 #include "imu.h"
+#include "power_save.h"
 
 typedef struct _proximity_range_update_t {
     int8_t index_change;

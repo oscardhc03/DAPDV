@@ -13,6 +13,7 @@
 
 #include "hmi.h"
 #include "tf_mini_parser.h"
+#include "imu.h"
 
 typedef struct _proximity_range_update_t {
     int8_t index_change;
@@ -22,6 +23,7 @@ typedef struct _proximity_range_update_t {
 static const char * const TAG = "MAIN";
 
 static const UBaseType_t TF_MINI_DATA_QUEUE_LEN = 20;
+static const uint32_t DISTANCE_SENSOR_TASK_NOTIFY_IMU_READY = 0x01u;
 
 static const BaseType_t PROXIMITY_SENSOR_ERROR = LONG_MAX;
 static const UBaseType_t PROXIMITY_UPDATE_QUEUE_LEN = 3;
@@ -44,9 +46,12 @@ static void distance_sensor_task(void * pvParameters);
 static void proximity_task(void * pvParameters);
 static void hmi_task(void * pvParameters);
 
+static IRAM_ATTR void imu_isr(void * pvParameters); 
+
 static esp_err_t feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks);
 
 static QueueHandle_t feedback_event_queue;
+static TaskHandle_t distance_sensor_task_handle;
 
 void app_main(void)
 {
@@ -55,6 +60,11 @@ void app_main(void)
     QueueHandle_t proximity_update_queue;
 
     status = ESP_OK;
+
+    if (ESP_OK == status)
+    {
+        status = gpio_install_isr_service(ESP_INTR_FLAG_EDGE);
+    }
 
     if (ESP_OK == status)
     {
@@ -91,7 +101,7 @@ void app_main(void)
 
     if (ESP_OK == status)
     {
-        result = xTaskCreate(distance_sensor_task, "dist_sensor_task", 2048, (void *) proximity_update_queue, 5, NULL);
+        result = xTaskCreate(distance_sensor_task, "dist_sensor_task", 4096, (void *) proximity_update_queue, 5, &distance_sensor_task_handle);
 
         if (pdPASS != result)
         {
@@ -315,16 +325,21 @@ void distance_sensor_task(void * pvParameters)
     static const _iq15 TF_MINI_DIST_MIN_M = _IQ15(0.1f);
     static const _iq15 TF_MINI_DIST_MAX_M = _IQ15(12);
 
-    static const uint8_t DIST_SENSOR_VALID_FG = 0x01u;
+    static const uint8_t DIST_SENSOR_VALID_FLAG = 0x01u;
+    static const uint8_t IMU_SENSOR_VALID_FLAG = 0x02u;
 
     esp_err_t status;
     BaseType_t queue_result;
+    uint32_t notification_value;
 
     QueueHandle_t distance_sensor_data_queue;
     QueueHandle_t proximity_range_update_queue;
 
     tf_mini_handle_t tf_mini_handle;
+    imu_handle_t imu_handle;
+
     tf_mini_df_t * data_frame;
+    imu_value_t imu_value;
     _iq15 previous_distance_meters;
     uint8_t valid_data_frames;
     uint8_t previous_valid_data_frames;
@@ -363,6 +378,11 @@ void distance_sensor_task(void * pvParameters)
         status = tf_mini_parser_init(&tf_mini_handle, &distance_sensor_config);
     }
 
+    if (ESP_OK == status)
+    {
+        status = imu_init(&imu_handle, imu_isr);
+    }
+
     if (ESP_OK != status)
     {
         ESP_LOGE(TAG, "Distance sensor task initialization failed (%s)", esp_err_to_name(status));
@@ -374,6 +394,7 @@ void distance_sensor_task(void * pvParameters)
 
     while (1)
     {
+        // Recibir datos del sensor de distancia.
         valid_data_frames = 0u;
         queue_result = xQueueReceive(distance_sensor_data_queue, (void *) &data_frame, (TickType_t) pdMS_TO_TICKS(100));
     
@@ -395,7 +416,7 @@ void distance_sensor_task(void * pvParameters)
                 }
                 else
                 {
-                    valid_data_frames |= DIST_SENSOR_VALID_FG;
+                    valid_data_frames |= DIST_SENSOR_VALID_FLAG;
                 }
                 break;
             case TF_MINI_ERR_LOW_STRENGTH:
@@ -420,14 +441,40 @@ void distance_sensor_task(void * pvParameters)
             ESP_LOGE(TAG, "TF mini NO DATA");
         }
 
+        // Leer valores de la IMU cuando generó la interrupción DATA_READY.
+        queue_result = xTaskNotifyWait(0UL, ULONG_MAX, &notification_value, (TickType_t) 0);
+
+        if (pdTRUE == queue_result && DISTANCE_SENSOR_TASK_NOTIFY_IMU_READY & notification_value)
+        {
+            status = imu_read(imu_handle, &imu_value);
+
+            if (ESP_OK == status)
+            {
+                valid_data_frames |= IMU_SENSOR_VALID_FLAG;
+            }
+            else
+            {
+                ESP_LOGW(TAG, "IMU read fail (%s)", esp_err_to_name(status));
+            }
+        }
+
         if (NULL != data_frame)
         {
-            if (DIST_SENSOR_VALID_FG & valid_data_frames)
+            if (DIST_SENSOR_VALID_FLAG & valid_data_frames)
             {
                 ESP_LOGD(TAG, "TF mini DF { dist = %s m, strength = %hu, temp = %s deg C}", dist_str, data_frame->signal_strength, temperature_str);
             }
 
-            //TODO: Only send update when one of these conditions is met: 1) change of distance 2) change of angle 3) sensor error.
+            if (IMU_SENSOR_VALID_FLAG & valid_data_frames)
+            {
+                ESP_LOGD(
+                    TAG, "IMU data acce: {x = %.2f, y = %.2f, z = %.2f}, gyro: {x = %.2f, y = %.2f, z = %.2f}, temp = %.1f",
+                    imu_value.acceleration.x, imu_value.acceleration.y, imu_value.acceleration.z,
+                    imu_value.gyro.x, imu_value.gyro.y, imu_value.gyro.z, imu_value.temperature
+                );
+            }
+
+            //TODO: Considerar cambio de ángulo de la IMU al enviar una actualización de rango.
             if (previous_distance_meters != data_frame->distance_meters || previous_valid_data_frames != valid_data_frames)
             {
                 proximity_range_update = (proximity_range_update_t *) malloc(sizeof(proximity_range_update_t));
@@ -436,7 +483,7 @@ void distance_sensor_task(void * pvParameters)
                 {
                     proximity_range_update->index_change = 0;
 
-                    if (DIST_SENSOR_VALID_FG & valid_data_frames)
+                    if (DIST_SENSOR_VALID_FLAG & valid_data_frames)
                     {
                         proximity_range_update->distance_meters = data_frame->distance_meters;
                     }
@@ -473,6 +520,31 @@ void distance_sensor_task(void * pvParameters)
     }
 
     vTaskDelete(NULL);
+}
+
+void imu_isr(void * pvParameters)
+{
+    BaseType_t xHigherPriorityTaskWoken;
+
+    if (NULL != distance_sensor_task_handle)
+    {
+        // La acción es eSetBits, entonces siempre regresa pdPASS.
+        xTaskNotifyFromISR(
+            distance_sensor_task_handle,
+            DISTANCE_SENSOR_TASK_NOTIFY_IMU_READY,
+            eSetBits,
+            &xHigherPriorityTaskWoken
+        );
+    }
+    else
+    {
+        xHigherPriorityTaskWoken = pdFALSE;
+    }
+
+    if (pdTRUE == xHigherPriorityTaskWoken)
+    {
+        portYIELD_FROM_ISR();
+    }
 }
 
 esp_err_t feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks)

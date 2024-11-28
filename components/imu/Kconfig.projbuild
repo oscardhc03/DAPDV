@@ -1,0 +1,29 @@
+menu "IMU"
+    config IMU_SDA_GPIO_NUM
+        int
+        default 21
+        prompt "GPIO connected to the IMU's I2C bus SDA"
+        help
+            GPIO number of the pin connected to the SDA pin of the I2C bus where the IMU is connected.
+
+    config IMU_SCL_GPIO_NUM
+        int
+        default 22
+        prompt "GPIO connected to the IMU's I2C bus SCL"
+        help
+            GPIO number of the pin connected to the SCL pin of the I2C bus where the IMU is connected.
+        
+    config IMU_I2C_BUS_FREQ_HZ
+        int
+        default 100000
+        prompt "IMU I2C bus clock frequency (Hz)"
+        help
+            Frequency in Hz used in I2C communication with the IMU.
+
+    config IMU_INTERRUPT_GPIO_NUM
+        int
+        default 13
+        prompt "IMU interrupt pin GPIO number"
+        help
+            GPIO number connected to the interrupt PIN of the IMU.
+endmenu

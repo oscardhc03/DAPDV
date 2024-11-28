@@ -67,6 +67,11 @@ void app_main(void)
         status = gpio_install_isr_service(ESP_INTR_FLAG_EDGE);
     }
 
+    if (ESP_OK == status)
+    {
+        status = power_save_init();
+    }
+
     // Inicialización de queues de acceso "público".
     if (ESP_OK == status)
     {

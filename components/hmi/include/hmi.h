@@ -12,6 +12,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "power_save.h"
+
 /**
  * Public structures and enumerations.
  */
@@ -52,8 +54,10 @@ typedef struct _feedback_event_t {
 /**
  * @brief Inicializa los botones y el buzzer del HMI.
  * 
- * @return ESP_OK - HMI fue inicializada correctamente.
- *         Cualquier otro valor - Error durante la inicialización de HMI.
+ * @note Para que las interrupciones de GPIO funcionen, la aplicación debe invocar gpio_install_isr_service() antes de invocar hmi_init().
+ * 
+ * @return - ESP_OK HMI fue inicializada correctamente.
+ * @return - ESP_FAIL error durante la inicialización de HMI.
  */
 esp_err_t hmi_init(void);
 

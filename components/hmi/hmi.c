@@ -54,6 +54,9 @@ static const TickType_t NOTE_PAUSE_TICKS = pdMS_TO_TICKS(250);
 // Semáforo para controlar el acceso al buzzer. Sólo puede tomarlo una tarea cuando el buzzer no está reproduciendo un sonido.
 static SemaphoreHandle_t buzzer_semaphore;
 
+static esp_err_t hmi_power_button_init(void);
+static void IRAM_ATTR hmi_button_gpio_isr_handler(void * pvParameters);
+
 esp_err_t hmi_init(void)
 {
     esp_err_t status;
@@ -92,6 +95,11 @@ esp_err_t hmi_init(void)
         {
             ESP_LOGE(TAG, "Buzzer LEDC channel config error (%s)", esp_err_to_name(status));
         }
+    }
+
+    if (ESP_OK == status)
+    {
+        status = hmi_power_button_init();
     }
 
     return status;
@@ -166,4 +174,52 @@ esp_err_t hmi_buzzer_play_feedback_sequence(feedback_event_id_t event_id, TickTy
     }
 
     return status;
+}
+
+esp_err_t hmi_power_button_init(void)
+{
+    static const gpio_config_t hmi_button_gpio_config = {
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = (1ULL << CONFIG_HMI_POWER_BUTTON_PIN_NUMBER),
+        .intr_type = GPIO_INTR_NEGEDGE,
+        .pull_down_en = 0,
+        .pull_up_en = 1,
+    };
+
+    esp_err_t status;
+
+    status = gpio_config(&hmi_button_gpio_config);
+
+    if (ESP_OK == status)
+    {
+        status = gpio_isr_handler_add(CONFIG_HMI_POWER_BUTTON_PIN_NUMBER, hmi_button_gpio_isr_handler, (void *) CONFIG_HMI_POWER_BUTTON_PIN_NUMBER);
+    }
+
+    if (ESP_OK == status)
+    {
+        status = power_save_register_ext0_wakeup(CONFIG_HMI_POWER_BUTTON_PIN_NUMBER);
+    }
+
+    return status;
+}
+
+void hmi_button_gpio_isr_handler(void * pvParameters)
+{
+    BaseType_t xHigherPriorityTaskWoken;
+    esp_err_t status;
+    gpio_num_t pin_num;
+
+    pin_num = (gpio_num_t) pvParameters;
+    xHigherPriorityTaskWoken = pdFALSE;
+    status = ESP_OK;
+
+    if (CONFIG_HMI_POWER_BUTTON_PIN_NUMBER == pin_num)
+    {
+        status = power_save_post_event_from_isr(POWER_SAVE_EVT_USER_REQUEST, pdFALSE, &xHigherPriorityTaskWoken);
+    }
+
+    if (ESP_OK == status)
+    {
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
 }

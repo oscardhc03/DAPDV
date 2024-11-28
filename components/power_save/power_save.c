@@ -121,7 +121,7 @@ esp_err_t power_save_events_pending(EventBits_t * const out_events)
     return status;
 }
 
-esp_err_t power_save_post_event(const EventBits_t event)
+esp_err_t power_save_post_event(const EventBits_t event, BaseType_t clear_bits)
 {
     EventBits_t power_save_event_bits;
     BaseType_t should_enter_sleep;
@@ -138,7 +138,103 @@ esp_err_t power_save_post_event(const EventBits_t event)
 
     if (ESP_OK == status)
     {
-        power_save_event_bits = xEventGroupSetBits(power_save_event_group, event);
+        if (pdTRUE == clear_bits)
+        {
+            power_save_event_bits = xEventGroupSetBits(power_save_event_group, event);
+        }
+        else
+        {
+            power_save_event_bits = xEventGroupClearBits(power_save_event_group, event);
+        }
+
+        should_enter_sleep = (
+            POWER_SAVE_EVT_LOW_BATTERY & power_save_event_bits || 
+            POWER_SAVE_EVT_USER_REQUEST & power_save_event_bits || 
+            POWER_SAVE_EVT_ALL_SENSORS_IDLE == (POWER_SAVE_EVT_ALL_SENSORS_IDLE & power_save_event_bits)
+        );
+
+        if (should_enter_sleep && NULL == sleep_activation_timer)
+        {
+            sleep_activation_timer = xTimerCreate(
+                "sleep", 
+                WAIT_BEFORE_DEEP_SLEEP_ENTER_TICKS, 
+                pdFALSE, 
+                NULL, 
+                sleep_enter_timer_callback
+            );
+
+            if (NULL != sleep_activation_timer)
+            {
+                timer_modify_result = xTimerStart(sleep_activation_timer, pdMS_TO_TICKS(10));
+
+                if (pdFAIL == timer_modify_result)
+                {
+                    ESP_LOGE(TAG, "Sleep timer start fail");
+                }
+            }
+            else
+            {
+                status = ESP_ERR_NO_MEM;
+            }
+        }
+        else if (!should_enter_sleep && NULL != sleep_activation_timer)
+        {
+            timer_modify_result = xTimerStop(sleep_activation_timer, pdMS_TO_TICKS(10));
+
+            if (pdPASS == timer_modify_result)
+            {
+                timer_modify_result = xTimerDelete(sleep_activation_timer, pdMS_TO_TICKS(10));
+
+                if (pdPASS == timer_modify_result)
+                {
+                    sleep_activation_timer = NULL;
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "Sleep timer delete fail");
+                }
+            }
+            else
+            {
+                ESP_LOGE(TAG, "Sleep timer stop fail");
+            }
+        }
+    }
+
+    return status;
+}
+
+esp_err_t power_save_post_event_from_isr(const EventBits_t event, BaseType_t clear_bits, BaseType_t * const pxHigherPriorityTaskWoken)
+{
+    EventBits_t power_save_event_bits;
+    BaseType_t should_enter_sleep;
+
+    esp_err_t status;
+    BaseType_t timer_modify_result;
+
+    status = ESP_OK;
+
+    if (NULL == pxHigherPriorityTaskWoken)
+    {
+        status = ESP_ERR_INVALID_ARG;
+    }
+
+    if (NULL == power_save_event_group)
+    {
+        status = ESP_ERR_INVALID_STATE;
+    }
+
+    if (ESP_OK == status)
+    {
+        if (pdTRUE == clear_bits)
+        {
+            power_save_event_bits = xEventGroupClearBitsFromISR(power_save_event_group, event);
+        }
+        else
+        {
+            power_save_event_bits = xEventGroupSetBitsFromISR(power_save_event_group, event, pxHigherPriorityTaskWoken);
+        }
+
         should_enter_sleep = (
             POWER_SAVE_EVT_LOW_BATTERY & power_save_event_bits || 
             POWER_SAVE_EVT_USER_REQUEST & power_save_event_bits || 

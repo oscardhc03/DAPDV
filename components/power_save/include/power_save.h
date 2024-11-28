@@ -77,11 +77,29 @@ esp_err_t power_save_events_pending(EventBits_t * const out_events);
  * No bloquea la tarea.
  * 
  * @param event el conjunto de eventos de ahorro de energía.
+ * @param clear_bits si es pdTRUE, desactiva los eventos especificados en event. Si es pdFALSE, se activa los eventos.
  * 
  * @return - ESP_OK si actualizó correctamente el estado de los eventos de ahorro de energía.
  * @return - ESP_ERR_INVALID_STATE el módulo de ahorro de energía no estaba inicializado.
  * @return - ESP_FAIL en caso de algún otro error.
  */
-esp_err_t power_save_post_event(const EventBits_t event);
+esp_err_t power_save_post_event(const EventBits_t event, BaseType_t clear_bits);
+
+/**
+ * @brief Una versión de power_save_post_event() que puede invocarse desde una ISR.
+ * 
+ * Aunque el módulo de ahorro de energía no permite bloquear tareas según los eventos POWER_SAVE_EVT_*,
+ * debe usarse esta versión para modificar los eventos del módulo desde una ISR.
+ * 
+ * @param event el conjunto de eventos de ahorro de energía que activará o desactivará.
+ * @param clear_bits si es pdTRUE, desactiva los eventos especificados en event. Si es pdFALSE, se activa los eventos.
+ * @param pxHigherPriorityTaskWoken si es pdTRUE, la modificación de eventos desbloqueó una tarea de mayor prioridad. Tarea actual debería hacer yield.
+ * 
+ * @return - ESP_OK si actualizó correctamente el estado de los eventos de ahorro de energía.
+ * @return - ESP_ERR_INVALID_STATE el módulo de ahorro de energía no estaba inicializado.
+ * @return - ESP_ERR_INVALID_ARG si pxHigherPriorityTaskWoken es NULL.
+ * @return - ESP_FAIL en caso de algún otro error.
+ */
+esp_err_t power_save_post_event_from_isr(const EventBits_t event, BaseType_t clear_bits, BaseType_t * const pxHigherPriorityTaskWoken);
 
 #endif /* POWER_SAVE_H_ */

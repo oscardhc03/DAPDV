@@ -22,7 +22,6 @@ typedef struct _proximity_range_update_t {
 
 static const char * const TAG = "MAIN";
 
-static const UBaseType_t TF_MINI_DATA_QUEUE_LEN = 20;
 static const uint32_t DISTANCE_SENSOR_TASK_NOTIFY_IMU_READY = 0x01u;
 
 static const BaseType_t PROXIMITY_SENSOR_ERROR = LONG_MAX;
@@ -44,6 +43,7 @@ static tf_mini_parser_config_t distance_sensor_config = (tf_mini_parser_config_t
 
 static void distance_sensor_task(void * pvParameters);
 static void proximity_task(void * pvParameters);
+static void object_detection_task(void * pvParameters);
 static void hmi_task(void * pvParameters);
 
 static IRAM_ATTR void imu_isr(void * pvParameters); 
@@ -66,28 +66,20 @@ void app_main(void)
         status = gpio_install_isr_service(ESP_INTR_FLAG_EDGE);
     }
 
+    // Inicialización de queues de acceso "público".
     if (ESP_OK == status)
     {
         feedback_event_queue = xQueueCreate(CONFIG_HMI_FEEDBACK_EVENT_QUEUE_LENGTH, sizeof(feedback_event_t *));
-
-        if (NULL == feedback_event_queue)
-        {
-            status = ESP_ERR_NO_MEM;
-            ESP_LOGW(TAG, "Create feedback event queue fail (%s)", esp_err_to_name(status));
-        }
-    }
-
-    if (ESP_OK == status)
-    {
         proximity_update_queue = xQueueCreate(PROXIMITY_UPDATE_QUEUE_LEN, sizeof(proximity_range_update_t *));
 
-        if (NULL == proximity_update_queue)
+        if (NULL == feedback_event_queue || NULL == proximity_update_queue)
         {
             status = ESP_ERR_NO_MEM;
-            ESP_LOGW(TAG, "Create proximity update queue fail (%s)", esp_err_to_name(status));
+            ESP_LOGW(TAG, "Create queue fail (%s)", esp_err_to_name(status));
         }
     }
 
+    // Inicialización de tareas.
     if (ESP_OK == status)
     {
         result = xTaskCreate(proximity_task, "proximity_task", 2048, (void *) proximity_update_queue, 5, NULL);
@@ -95,7 +87,7 @@ void app_main(void)
         if (pdPASS != result)
         {
             status = ESP_FAIL;
-            ESP_LOGE(TAG, "Proximity task init error (%s)", esp_err_to_name(status));
+            ESP_LOGE(TAG, "Proximity task create error (%s)", esp_err_to_name(status));
         }
     }
 
@@ -106,7 +98,18 @@ void app_main(void)
         if (pdPASS != result)
         {
             status = ESP_FAIL;
-            ESP_LOGE(TAG, "Distance sensor task init error (%s)", esp_err_to_name(status));
+            ESP_LOGE(TAG, "Distance sensor task create error (%s)", esp_err_to_name(status));
+        }
+    }
+
+    if (ESP_OK == status)
+    {
+        result = xTaskCreate(object_detection_task, "obj_det_task", 2048, NULL, 4, NULL);
+
+        if (pdPASS != result)
+        {
+            status = ESP_FAIL;
+            ESP_LOGE(TAG, "Object detection task create error (%s)", esp_err_to_name(status));
         }
     }
 
@@ -117,7 +120,7 @@ void app_main(void)
         if (pdPASS != result)
         {
             status = ESP_FAIL;
-            ESP_LOGE(TAG, "HMI feedback task init error (%s)", esp_err_to_name(status));
+            ESP_LOGE(TAG, "HMI feedback task create error (%s)", esp_err_to_name(status));
         }
     }
 
@@ -321,7 +324,9 @@ void proximity_task(void * pvParameters)
 
 void distance_sensor_task(void * pvParameters)
 {
-    static const TickType_t SEND_PROXIMITY_UPDATE_TIMEOUT_TICKS = pdMS_TO_TICKS(10);
+    static const TickType_t SEND_PROXIMITY_UPDATE_TIMEOUT_TICKS = pdMS_TO_TICKS(5);
+    static const TickType_t DISTANCE_DATA_RECEIVE_TIMEOUT_TICKS = pdMS_TO_TICKS(5);
+    static const UBaseType_t TF_MINI_DATA_QUEUE_LEN = 32UL;
     static const _iq15 TF_MINI_DIST_MIN_M = _IQ15(0.1f);
     static const _iq15 TF_MINI_DIST_MAX_M = _IQ15(12);
 
@@ -396,7 +401,7 @@ void distance_sensor_task(void * pvParameters)
     {
         // Recibir datos del sensor de distancia.
         valid_data_frames = 0u;
-        queue_result = xQueueReceive(distance_sensor_data_queue, (void *) &data_frame, (TickType_t) pdMS_TO_TICKS(100));
+        queue_result = xQueueReceive(distance_sensor_data_queue, (void *) &data_frame, DISTANCE_DATA_RECEIVE_TIMEOUT_TICKS);
     
         if (pdPASS == queue_result && NULL != data_frame)
         {
@@ -435,10 +440,6 @@ void distance_sensor_task(void * pvParameters)
                 ESP_LOGE(TAG, "TF mini event not handled");
                 break;
             }
-        }
-        else
-        {
-            ESP_LOGE(TAG, "TF mini NO DATA");
         }
 
         // Leer valores de la IMU cuando generó la interrupción DATA_READY.
@@ -516,6 +517,53 @@ void distance_sensor_task(void * pvParameters)
         {
             free(data_frame);
             data_frame = NULL;
+        }
+    }
+
+    vTaskDelete(NULL);
+}
+
+void object_detection_task(void * pvParameters)
+{
+    static const uint32_t TEST_EVENT_PERIOD_SECONDS = 10UL;
+    static const TickType_t SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS = pdMS_TO_TICKS(100);
+
+    esp_err_t status;
+    uint32_t seconds_before_next_test_event;
+    BaseType_t did_detect_object;
+
+    status = ESP_OK;
+    seconds_before_next_test_event = TEST_EVENT_PERIOD_SECONDS;
+    did_detect_object = pdFALSE;
+
+    while (1)
+    {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        seconds_before_next_test_event--;
+
+        if (0UL == seconds_before_next_test_event)
+        {
+            seconds_before_next_test_event = TEST_EVENT_PERIOD_SECONDS;
+            did_detect_object = !did_detect_object;
+
+            if (pdTRUE == did_detect_object)
+            {
+                ESP_LOGI(TAG, "Test object detected");
+
+                status = feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_NORMAL, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Test object no longer detected");
+
+                status = feedback_event_send(FEEDBACK_EVENT_STRAIGHT, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_LOW, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
+            }
+
+            if (ESP_OK != status)
+            {
+                ESP_LOGE(TAG, "Object detect feedback event send fail (%s)", esp_err_to_name(status));
+            }
         }
     }
 

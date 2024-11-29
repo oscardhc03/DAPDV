@@ -1,0 +1,21 @@
+menu "Camera HTTP client"
+    config WIFI_AP_SSID
+        string
+        default ""
+        prompt "Wifi access point SSID"
+
+    config WIFI_AP_PASSWORD
+        string
+        default ""
+        prompt "Wifi access point password (WPA or WPA2)"
+
+    config WIFI_AP_MAX_CONNECTION_ATTEMPTS
+        int
+        default 5
+        prompt "Wifi connection attempt limit"
+
+    config CAMERA_SERVER_URL
+        string
+        default ""
+        prompt "URL string of the server hosting the camera service"
+endmenu

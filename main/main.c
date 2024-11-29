@@ -12,6 +12,7 @@
 #include <IQmathLib.h>
 
 #include "battery_monitor.h"
+#include "camera_client.h"
 #include "hmi.h"
 #include "tf_mini_parser.h"
 #include "imu.h"
@@ -119,7 +120,7 @@ void app_main(void)
 
     if (ESP_OK == status)
     {
-        result = xTaskCreate(object_detection_task, "obj_det_task", 2048, NULL, 4, NULL);
+        result = xTaskCreate(object_detection_task, "obj_det_task", 4096, NULL, 4, NULL);
 
         if (pdPASS != result)
         {
@@ -130,7 +131,7 @@ void app_main(void)
 
     if (ESP_OK == status)
     {
-        result = xTaskCreate(hmi_task, "hmi_task", 2048, (void *) feedback_event_queue, 6, NULL);
+        result = xTaskCreate(hmi_task, "hmi_task", 4096, (void *) feedback_event_queue, 6, NULL);
 
         if (pdPASS != result)
         {
@@ -580,45 +581,65 @@ void distance_sensor_task(void * pvParameters)
 
 void object_detection_task(void * pvParameters)
 {
-    static const uint32_t TEST_EVENT_PERIOD_SECONDS = 10UL;
+    static const TickType_t SEND_REQUEST_PERIOD_TICKS = pdMS_TO_TICKS(15000);
     static const TickType_t SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS = pdMS_TO_TICKS(100);
 
+    static const float OBJECT_DETECT_THRESHOLD = 0.75f;
+
     esp_err_t status;
-    uint32_t seconds_before_next_test_event;
-    BaseType_t did_detect_object;
+    cam_detect_objects_t detected_objects;
 
     status = ESP_OK;
-    seconds_before_next_test_event = TEST_EVENT_PERIOD_SECONDS;
-    did_detect_object = pdFALSE;
+
+    if (ESP_OK == status)
+    {
+        status = camera_client_init();
+        ESP_LOGI(TAG, "Camera client init complete (%s)", esp_err_to_name(status));
+    }
+
+    if (ESP_OK != status)
+    {
+        ESP_LOGE(TAG, "Object initialization task error (%s)", esp_err_to_name(status));
+        vTaskDelete(NULL);
+    }
 
     while (1)
     {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(SEND_REQUEST_PERIOD_TICKS);
 
-        seconds_before_next_test_event--;
+        ESP_LOGI(TAG, "Fetching camera results...");
+        status = camera_client_fetch_results(&detected_objects);
 
-        if (0UL == seconds_before_next_test_event)
+        if (ESP_OK == status)
         {
-            seconds_before_next_test_event = TEST_EVENT_PERIOD_SECONDS;
-            did_detect_object = !did_detect_object;
+            ESP_LOGI(TAG, "Persona = %.6f", detected_objects.persona);
+            ESP_LOGI(TAG, "Escaleras = %.6f", detected_objects.escaleras);
+            ESP_LOGI(TAG, "Entorno = %.6f", detected_objects.entorno);
+            ESP_LOGI(TAG, "Puerta = %.6f", detected_objects.puerta);
 
-            if (pdTRUE == did_detect_object)
+            if (OBJECT_DETECT_THRESHOLD < detected_objects.persona || OBJECT_DETECT_THRESHOLD < detected_objects.escaleras || OBJECT_DETECT_THRESHOLD < detected_objects.puerta)
             {
-                ESP_LOGI(TAG, "Test object detected");
-
+                // Si es cualquiera de los objetos anteriores, enviar evento para detener.
                 status = hmi_feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_NORMAL, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
+                
+                if (ESP_OK != status)
+                {
+                    ESP_LOGW(TAG, "Object detect feedback event send fail (%s)", esp_err_to_name(status));
+                }
             }
-            else
+            else if (OBJECT_DETECT_THRESHOLD < detected_objects.entorno)
             {
-                ESP_LOGI(TAG, "Test object no longer detected");
+                status = hmi_feedback_event_send(FEEDBACK_EVENT_STRAIGHT, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_NORMAL, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
 
-                status = hmi_feedback_event_send(FEEDBACK_EVENT_STRAIGHT, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_LOW, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
+                if (ESP_OK != status)
+                {
+                    ESP_LOGW(TAG, "Object detect feedback event send fail (%s)", esp_err_to_name(status));
+                }
             }
-
-            if (ESP_OK != status)
-            {
-                ESP_LOGE(TAG, "Object detect feedback event send fail (%s)", esp_err_to_name(status));
-            }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "HTTP request fail (%s)", esp_err_to_name(status));
         }
     }
 

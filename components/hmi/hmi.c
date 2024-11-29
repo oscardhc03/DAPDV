@@ -51,10 +51,14 @@ static const uint32_t note_sequences[FEEDBACK_EVENT_MAX - 1][NUM_NOTES_PER_SEQUE
 static const TickType_t NOTE_DURATION_TICKS = pdMS_TO_TICKS(250);
 static const TickType_t NOTE_PAUSE_TICKS = pdMS_TO_TICKS(250);
 
+static QueueHandle_t feedback_event_queue;
 // Semáforo para controlar el acceso al buzzer. Sólo puede tomarlo una tarea cuando el buzzer no está reproduciendo un sonido.
 static SemaphoreHandle_t buzzer_semaphore;
 
-esp_err_t hmi_init(void)
+static esp_err_t hmi_power_button_init(void);
+static void IRAM_ATTR hmi_button_gpio_isr_handler(void * pvParameters);
+
+esp_err_t hmi_init(QueueHandle_t feedback_event_queue_handle)
 {
     esp_err_t status;
 
@@ -72,6 +76,12 @@ esp_err_t hmi_init(void)
     else
     {
         status = ESP_ERR_NO_MEM;
+    }
+
+    feedback_event_queue = feedback_event_queue_handle;
+    if (NULL == feedback_event_queue)
+    {
+        status = ESP_ERR_INVALID_ARG;
     }
 
     if (ESP_OK == status)
@@ -92,6 +102,16 @@ esp_err_t hmi_init(void)
         {
             ESP_LOGE(TAG, "Buzzer LEDC channel config error (%s)", esp_err_to_name(status));
         }
+    }
+
+    if (ESP_OK == status)
+    {
+        status = hmi_power_button_init();
+    }
+
+    if (ESP_OK == status)
+    {
+        status = hmi_feedback_event_send(FEEDBACK_EVENT_PWR_SAVE_EXIT, FEEDBACK_SOURCE_SYSTEM, FEEDBACK_PRIORITY_HIGH, (TickType_t) 0);
     }
 
     return status;
@@ -166,4 +186,100 @@ esp_err_t hmi_buzzer_play_feedback_sequence(feedback_event_id_t event_id, TickTy
     }
 
     return status;
+}
+
+esp_err_t hmi_power_button_init(void)
+{
+    static const gpio_config_t hmi_button_gpio_config = {
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = (1ULL << CONFIG_HMI_POWER_BUTTON_PIN_NUMBER),
+        .intr_type = GPIO_INTR_NEGEDGE,
+        .pull_up_en = 1,
+    };
+
+    esp_err_t status;
+
+    status = power_save_register_ext0_wakeup(CONFIG_HMI_POWER_BUTTON_PIN_NUMBER);
+
+    if (ESP_OK == status)
+    {
+        status = gpio_config(&hmi_button_gpio_config);
+    }
+
+    if (ESP_OK == status)
+    {
+        status = gpio_isr_handler_add(CONFIG_HMI_POWER_BUTTON_PIN_NUMBER, hmi_button_gpio_isr_handler, (void *) CONFIG_HMI_POWER_BUTTON_PIN_NUMBER);
+    }
+
+    if (ESP_OK == status)
+    {
+        status = gpio_intr_enable(CONFIG_HMI_POWER_BUTTON_PIN_NUMBER);
+    }
+
+    return status;
+}
+
+esp_err_t hmi_feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks)
+{
+    esp_err_t status;
+    BaseType_t result;
+    feedback_event_t * feedback_event;
+
+    if (NULL != feedback_event_queue)
+    {
+        status = ESP_OK;
+    }
+    else
+    {
+        status = ESP_ERR_INVALID_STATE;
+    }
+
+    if (status == ESP_OK)
+    {
+        feedback_event = (feedback_event_t *) malloc(sizeof(feedback_event_t));
+
+        if (NULL == feedback_event)
+        {
+            status = ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (ESP_OK == status)
+    {
+        *feedback_event = (feedback_event_t) {
+            .id = event_id,
+            .source = source,
+            .priority = priority,
+        };
+
+        result = xQueueSendToBack(feedback_event_queue, (void *) &feedback_event, timeout_ticks);
+
+        if (pdFAIL == result)
+        {
+            status = ESP_FAIL;
+        }
+    }
+
+    return status;
+}
+
+void hmi_button_gpio_isr_handler(void * pvParameters)
+{
+    BaseType_t xHigherPriorityTaskWoken;
+    esp_err_t status;
+    gpio_num_t pin_num;
+
+    pin_num = (gpio_num_t) pvParameters;
+    xHigherPriorityTaskWoken = pdFALSE;
+    status = ESP_OK;
+
+    if (CONFIG_HMI_POWER_BUTTON_PIN_NUMBER == pin_num)
+    {
+        status = power_save_post_event_from_isr(POWER_SAVE_EVT_USER_REQUEST, pdFALSE, &xHigherPriorityTaskWoken);
+    }
+
+    if (ESP_OK == status)
+    {
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
 }

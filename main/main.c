@@ -11,9 +11,11 @@
 
 #include <IQmathLib.h>
 
+#include "battery_monitor.h"
 #include "hmi.h"
 #include "tf_mini_parser.h"
 #include "imu.h"
+#include "power_save.h"
 
 typedef struct _proximity_range_update_t {
     int8_t index_change;
@@ -48,9 +50,6 @@ static void hmi_task(void * pvParameters);
 
 static IRAM_ATTR void imu_isr(void * pvParameters); 
 
-static esp_err_t feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks);
-
-static QueueHandle_t feedback_event_queue;
 static TaskHandle_t distance_sensor_task_handle;
 
 void app_main(void)
@@ -58,12 +57,18 @@ void app_main(void)
     esp_err_t status;
     BaseType_t result;
     QueueHandle_t proximity_update_queue;
+    QueueHandle_t feedback_event_queue;
 
     status = ESP_OK;
 
     if (ESP_OK == status)
     {
-        status = gpio_install_isr_service(ESP_INTR_FLAG_EDGE);
+        status = gpio_install_isr_service(0);
+    }
+
+    if (ESP_OK == status)
+    {
+        status = power_save_init();
     }
 
     // Inicialización de queues de acceso "público".
@@ -76,6 +81,16 @@ void app_main(void)
         {
             status = ESP_ERR_NO_MEM;
             ESP_LOGW(TAG, "Create queue fail (%s)", esp_err_to_name(status));
+        }
+    }
+
+    if (ESP_OK == status)
+    {
+        status = battery_monitor_init(feedback_event_queue);
+
+        if (ESP_OK != status)
+        {
+            ESP_LOGE(TAG, "Battery monitor init fail (%s)", esp_err_to_name(status));
         }
     }
 
@@ -115,7 +130,7 @@ void app_main(void)
 
     if (ESP_OK == status)
     {
-        result = xTaskCreate(hmi_task, "hmi_task", 2048, NULL, 6, NULL);
+        result = xTaskCreate(hmi_task, "hmi_task", 2048, (void *) feedback_event_queue, 6, NULL);
 
         if (pdPASS != result)
         {
@@ -136,18 +151,26 @@ void app_main(void)
 
 void hmi_task(void * pvParameters)
 {
-    static const TickType_t FEEDBACK_RECEIVE_TIMEOUT_TICKS = pdMS_TO_TICKS(1000u);
+    static const TickType_t FEEDBACK_RECEIVE_TIMEOUT_TICKS = pdMS_TO_TICKS(100u);
     static const TickType_t BUZZER_CONTROL_TIMEOUT_TICKS = pdMS_TO_TICKS(100u);
 
     BaseType_t result;
     esp_err_t status;
+    QueueHandle_t feedback_event_queue;
+    EventBits_t power_save_events;
     feedback_event_t * feedback_event;
 
     status = ESP_OK;
 
+    feedback_event_queue = (QueueHandle_t) pvParameters;
+    if (NULL == feedback_event_queue)
+    {
+        status = ESP_ERR_INVALID_ARG;
+    }
+
     if (ESP_OK == status)
     {
-        status = hmi_init();
+        status = hmi_init(feedback_event_queue);
         ESP_LOGI(TAG, "hmi init status (%s)", esp_err_to_name(status));
     }
 
@@ -187,6 +210,25 @@ void hmi_task(void * pvParameters)
             else
             {
                 ESP_LOGD(TAG, "HMI task received no feedback events");
+            }
+
+            status = power_save_events_pending(&power_save_events);
+
+            if (ESP_OK == status)
+            {
+                if (POWER_SAVE_EVT_ENTER & power_save_events)
+                {
+                    status = hmi_feedback_event_send(FEEDBACK_EVENT_PWR_SAVE_ENTER, FEEDBACK_SOURCE_SYSTEM, FEEDBACK_PRIORITY_HIGH, (TickType_t) 0);
+
+                    if (ESP_OK != status)
+                    {
+                        ESP_LOGE(TAG, "Power off feedback send fail (%s)", esp_err_to_name(status));
+                    }
+                }
+            }
+            else
+            {
+                ESP_LOGW(TAG, "HMI task check power save events fail (%s)", esp_err_to_name(status));
             }
         }
     }
@@ -272,7 +314,7 @@ void proximity_task(void * pvParameters)
                     {
                         if (2u > notify_level)
                         {
-                            status = feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_HIGH, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
+                            status = hmi_feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_HIGH, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
 
                             if (ESP_OK == status)
                             {
@@ -290,7 +332,7 @@ void proximity_task(void * pvParameters)
                     }
                     else if (1u > notify_level)
                     {
-                        status = feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
+                        status = hmi_feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
 
                         if (ESP_OK == status)
                         {
@@ -302,14 +344,23 @@ void proximity_task(void * pvParameters)
                         }
                     }
                 }
-                else
+                else if (0u != notify_level)
                 {
-                    notify_level = 0u;
+                    status = hmi_feedback_event_send(FEEDBACK_EVENT_STRAIGHT, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
+
+                    if (ESP_OK == status)
+                    {
+                        notify_level = 0u;
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "Send feedback event fail (%s)", esp_err_to_name(status));
+                    }
                 }
             }
             else
             {
-                status = feedback_event_send(FEEDBACK_EVENT_SENSOR_ERROR, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
+                status = hmi_feedback_event_send(FEEDBACK_EVENT_SENSOR_ERROR, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
 
                 if (ESP_OK != status)
                 {
@@ -386,6 +437,10 @@ void distance_sensor_task(void * pvParameters)
     if (ESP_OK == status)
     {
         status = imu_init(&imu_handle, imu_isr);
+        if (ESP_FAIL == status)
+        {
+            status = ESP_OK;
+        }
     }
 
     if (ESP_OK != status)
@@ -551,13 +606,13 @@ void object_detection_task(void * pvParameters)
             {
                 ESP_LOGI(TAG, "Test object detected");
 
-                status = feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_NORMAL, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
+                status = hmi_feedback_event_send(FEEDBACK_EVENT_STOP, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_NORMAL, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
             }
             else
             {
                 ESP_LOGI(TAG, "Test object no longer detected");
 
-                status = feedback_event_send(FEEDBACK_EVENT_STRAIGHT, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_LOW, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
+                status = hmi_feedback_event_send(FEEDBACK_EVENT_STRAIGHT, FEEDBACK_SOURCE_OBJECT_DETECT, FEEDBACK_PRIORITY_LOW, SEND_OBJECT_DETECT_EVENT_TIMEOUT_TICKS);
             }
 
             if (ESP_OK != status)
@@ -593,48 +648,4 @@ void imu_isr(void * pvParameters)
     {
         portYIELD_FROM_ISR();
     }
-}
-
-esp_err_t feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks)
-{
-    esp_err_t status;
-    BaseType_t result;
-    feedback_event_t * feedback_event;
-
-    if (NULL != feedback_event_queue)
-    {
-        status = ESP_OK;
-    }
-    else
-    {
-        status = ESP_ERR_INVALID_STATE;
-    }
-
-    if (status == ESP_OK)
-    {
-        feedback_event = (feedback_event_t *) malloc(sizeof(feedback_event_t));
-
-        if (NULL == feedback_event)
-        {
-            status = ESP_ERR_NO_MEM;
-        }
-    }
-
-    if (ESP_OK == status)
-    {
-        *feedback_event = (feedback_event_t) {
-            .id = event_id,
-            .source = source,
-            .priority = priority,
-        };
-
-        result = xQueueSendToBack(feedback_event_queue, (void *) &feedback_event, timeout_ticks);
-
-        if (pdFAIL == result)
-        {
-            status = ESP_FAIL;
-        }
-    }
-
-    return status;
 }

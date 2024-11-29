@@ -1,0 +1,8 @@
+menu "Power save"
+    config WAIT_BEFORE_DEEP_SLEEP_ENTER_MS
+        int
+        default 1000
+        prompt "Milliseconds to wait before entering deep sleep after conditions are met"
+        help
+            If deep sleep conditions are met, the power save module waits at least this number of milliseconds before entering sleep.        
+endmenu

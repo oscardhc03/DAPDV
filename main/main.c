@@ -12,6 +12,7 @@
 #include <IQmathLib.h>
 
 #include "battery_monitor.h"
+#include "camera_client.h"
 #include "hmi.h"
 #include "tf_mini_parser.h"
 #include "imu.h"
@@ -119,7 +120,7 @@ void app_main(void)
 
     if (ESP_OK == status)
     {
-        result = xTaskCreate(object_detection_task, "obj_det_task", 2048, NULL, 4, NULL);
+        result = xTaskCreate(object_detection_task, "obj_det_task", 4096, NULL, 4, NULL);
 
         if (pdPASS != result)
         {
@@ -130,7 +131,7 @@ void app_main(void)
 
     if (ESP_OK == status)
     {
-        result = xTaskCreate(hmi_task, "hmi_task", 2048, (void *) feedback_event_queue, 6, NULL);
+        result = xTaskCreate(hmi_task, "hmi_task", 4096, (void *) feedback_event_queue, 6, NULL);
 
         if (pdPASS != result)
         {
@@ -590,6 +591,17 @@ void object_detection_task(void * pvParameters)
     status = ESP_OK;
     seconds_before_next_test_event = TEST_EVENT_PERIOD_SECONDS;
     did_detect_object = pdFALSE;
+
+    if (ESP_OK == status)
+    {
+        status = camera_client_init();
+    }
+
+    if (ESP_OK != status)
+    {
+        ESP_LOGE(TAG, "Object initialization task error (%s)", esp_err_to_name(status));
+        vTaskDelete(NULL);
+    }
 
     while (1)
     {

@@ -211,6 +211,11 @@ esp_err_t hmi_power_button_init(void)
         status = gpio_isr_handler_add(CONFIG_HMI_POWER_BUTTON_PIN_NUMBER, hmi_button_gpio_isr_handler, (void *) CONFIG_HMI_POWER_BUTTON_PIN_NUMBER);
     }
 
+    if (ESP_OK == status)
+    {
+        status = gpio_intr_enable(CONFIG_HMI_POWER_BUTTON_PIN_NUMBER);
+    }
+
     return status;
 }
 

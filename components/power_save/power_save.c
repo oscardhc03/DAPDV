@@ -14,8 +14,13 @@ static const EventBits_t POWER_SAVE_EVT_ALL_SENSORS_IDLE = (
 static EventGroupHandle_t power_save_event_group;
 static TimerHandle_t sleep_activation_timer;
 
-static gpio_num_t ext0_wakeup_gpio = GPIO_NUM_MAX;
+
+#if SOC_RTC_FAST_MEM_SUPPORTED
 static RTC_DATA_ATTR struct timeval sleep_enter_time;
+static RTC_DATA_ATTR gpio_num_t ext0_wakeup_gpio = GPIO_NUM_MAX;
+#else
+static struct timeval sleep_enter_time;
+#endif
 
 static void sleep_enter_timer_callback(TimerHandle_t timer);
 
@@ -87,7 +92,12 @@ esp_err_t power_save_register_ext0_wakeup(gpio_num_t wakeup_pin)
 {
     esp_err_t status;
 
-    status = esp_sleep_enable_ext0_wakeup(wakeup_pin, 0);
+    status = rtc_gpio_deinit(wakeup_pin);
+
+    if (ESP_OK == status)
+    {
+        status = esp_sleep_enable_ext0_wakeup(wakeup_pin, 0);
+    }
 
     if (ESP_OK == status)
     {
@@ -140,21 +150,23 @@ esp_err_t power_save_post_event(const EventBits_t event, BaseType_t clear_bits)
     {
         if (pdTRUE == clear_bits)
         {
-            power_save_event_bits = xEventGroupSetBits(power_save_event_group, event);
+            power_save_event_bits = xEventGroupClearBits(power_save_event_group, event);
         }
         else
         {
-            power_save_event_bits = xEventGroupClearBits(power_save_event_group, event);
+            power_save_event_bits = xEventGroupSetBits(power_save_event_group, event);
         }
 
         should_enter_sleep = (
-            POWER_SAVE_EVT_LOW_BATTERY & power_save_event_bits || 
+            POWER_SAVE_EVT_BATTERY_CRITICAL & power_save_event_bits || 
             POWER_SAVE_EVT_USER_REQUEST & power_save_event_bits || 
             POWER_SAVE_EVT_ALL_SENSORS_IDLE == (POWER_SAVE_EVT_ALL_SENSORS_IDLE & power_save_event_bits)
         );
 
         if (should_enter_sleep && NULL == sleep_activation_timer)
         {
+            xEventGroupSetBits(power_save_event_group, POWER_SAVE_EVT_ENTER);
+
             sleep_activation_timer = xTimerCreate(
                 "sleep", 
                 WAIT_BEFORE_DEEP_SLEEP_ENTER_TICKS, 
@@ -188,6 +200,7 @@ esp_err_t power_save_post_event(const EventBits_t event, BaseType_t clear_bits)
                 if (pdPASS == timer_modify_result)
                 {
                     sleep_activation_timer = NULL;
+                    xEventGroupClearBits(power_save_event_group, POWER_SAVE_EVT_ENTER);
                 }
                 else
                 {
@@ -236,7 +249,7 @@ esp_err_t power_save_post_event_from_isr(const EventBits_t event, BaseType_t cle
         }
 
         should_enter_sleep = (
-            POWER_SAVE_EVT_LOW_BATTERY & power_save_event_bits || 
+            POWER_SAVE_EVT_BATTERY_CRITICAL & power_save_event_bits || 
             POWER_SAVE_EVT_USER_REQUEST & power_save_event_bits || 
             POWER_SAVE_EVT_ALL_SENSORS_IDLE == (POWER_SAVE_EVT_ALL_SENSORS_IDLE & power_save_event_bits)
         );
@@ -304,7 +317,7 @@ void sleep_enter_timer_callback(TimerHandle_t timer)
         // Revisar si todavía se cumple al menos una de las tres condiciones para entrar en sueño profundo.
         power_save_event_bits = xEventGroupGetBits(power_save_event_group);
         should_enter_sleep = (
-            POWER_SAVE_EVT_LOW_BATTERY & power_save_event_bits || 
+            POWER_SAVE_EVT_BATTERY_CRITICAL & power_save_event_bits || 
             POWER_SAVE_EVT_USER_REQUEST & power_save_event_bits || 
             POWER_SAVE_EVT_ALL_SENSORS_IDLE == (POWER_SAVE_EVT_ALL_SENSORS_IDLE & power_save_event_bits)
         );
@@ -313,11 +326,14 @@ void sleep_enter_timer_callback(TimerHandle_t timer)
         {
             if (GPIO_NUM_MAX > ext0_wakeup_gpio)
             {
-                status = rtc_gpio_pullup_dis(ext0_wakeup_gpio);
+                status = esp_sleep_enable_ext0_wakeup(ext0_wakeup_gpio, 0);
+                
+                ESP_LOGI(TAG, "Enable EXT0 wakeup on GPIO %d (%s)", ext0_wakeup_gpio, esp_err_to_name(status));
 
                 if (ESP_OK == status)
                 {
-                    status = rtc_gpio_pullup_en(ext0_wakeup_gpio);
+                    // ESP_ERROR_CHECK(rtc_gpio_pulldown_dis(ext0_wakeup_gpio));
+                    // ESP_ERROR_CHECK(rtc_gpio_pullup_en(ext0_wakeup_gpio));
                 }
             }
 

@@ -1,0 +1,25 @@
+menu "Battery monitor"
+    config BATTERY_MON_LOW_BATTERY_THRESHOLD_MV
+        int
+        default 3500
+        prompt "Battery low state threshold (mV)"
+        help
+            Under this threshold, the battery monitor considers the battery voltage as LOW.
+    config BATTERY_MON_CRITICAL_BATTERY_THRESHOLD_MV
+        int
+        default 3200
+        prompt "Battery critical sate threshold (mV)"
+        help
+            Under this voltage threshold, the battery montiro considers the battery voltage as CRITICAL.
+    config BATTERY_MONITOR_SAMPLE_PERIOD_MS
+        int
+        default 1000
+        prompt "Battery monitor ADC sample period (milliseconds)"
+        help
+            The number of milliseconds between two battery monitor samples.
+    config BATTERY_MON_ADC_GPIO_NUM
+        int
+        default 35
+        prompt "GPIO number of the PIN connected to the battery voltage analog output"
+
+endmenu

@@ -14,7 +14,7 @@
 
 #define POWER_SAVE_EVT_ENTER            ((EventBits_t) (1u << 0u))
 #define POWER_SAVE_EVT_WOKE_FROM_SLEEP  ((EventBits_t) (1u << 1u))
-#define POWER_SAVE_EVT_LOW_BATTERY      ((EventBits_t) (1u << 2u))
+#define POWER_SAVE_EVT_BATTERY_CRITICAL ((EventBits_t) (1u << 2u))
 #define POWER_SAVE_EVT_USER_REQUEST     ((EventBits_t) (1u << 3u))
 #define POWER_SAVE_EVT_SENSOR_1_IDLE    ((EventBits_t) (1u << 4u))
 #define POWER_SAVE_EVT_SENSOR_2_IDLE    ((EventBits_t) (1u << 5u))

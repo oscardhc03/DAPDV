@@ -42,6 +42,7 @@ typedef enum _feedback_source_t {
     FEEDBACK_SOURCE_PROXIMITY,
     FEEDBACK_SOURCE_NAVIGATION,
     FEEDBACK_SOURCE_OBJECT_DETECT,
+    FEEDBACK_SOURCE_SYSTEM,
     FEEDBACK_SOURCE_MAX,
 } feedback_source_t;
 
@@ -56,10 +57,13 @@ typedef struct _feedback_event_t {
  * 
  * @note Para que las interrupciones de GPIO funcionen, la aplicación debe invocar gpio_install_isr_service() antes de invocar hmi_init().
  * 
+ * @param feedback_event_queue_handle referencia a la queue que usará HMI para transmitir eventos de retroalimentación.
+ * 
  * @return - ESP_OK HMI fue inicializada correctamente.
+ * @return - ESP_ERR_INVALID_ARG si feedback_event_queue_handle es NULL.
  * @return - ESP_FAIL error durante la inicialización de HMI.
  */
-esp_err_t hmi_init(void);
+esp_err_t hmi_init(QueueHandle_t feedback_event_queue_handle);
 
 
 /**
@@ -73,5 +77,20 @@ esp_err_t hmi_init(void);
  * @return ESP_OK si la secuencia se reprodució correctamente.
  */
 esp_err_t hmi_buzzer_play_feedback_sequence(feedback_event_id_t event_id, TickType_t timeout_ticks);
+
+/**
+ * @brief Envía un evento de retroalimentación para que HMI lo comunique al usuario.
+ * 
+ * @param event_id identificador del evento de retroalimentación (FEEDBACK_EVENT_*).
+ * @param source fuente de la retroalimentación (FEEDBACK_SOURCE_*).
+ * @param priority prioridad de la retroalimentación (FEEDBACK_PRIORITY_*).
+ * @param timeout_ticks el número máximo de ticks que bloquea a la tarea si no hay espacio en la queue de eventos.
+ * 
+ * @return - ESP_OK si envió el evento de retroalimentación correctamente.
+ * @return - ESP_ERR_INVALID_STATE si HMI no está inicializado.
+ * @return - ESP_ERR_NO_MEM si no hay suficiente memoria para enviar el evento.
+ * @return - ESP_FAIL si no hay espacio en la queue de eventos. La tarea puede haber sido bloqueada hasta timeout_ticks.
+ */
+esp_err_t hmi_feedback_event_send(feedback_event_id_t event_id, feedback_source_t source, feedback_priority_t priority, TickType_t timeout_ticks);
 
 #endif /* HMI_H_ */

@@ -109,7 +109,7 @@ void app_main(void)
 
     if (ESP_OK == status)
     {
-        result = xTaskCreate(distance_sensor_task, "dist_sensor_task", 4096, (void *) proximity_update_queue, 5, &distance_sensor_task_handle);
+        result = xTaskCreate(distance_sensor_task, "dist_sensor_task", 8192, (void *) proximity_update_queue, 5, &distance_sensor_task_handle);
 
         if (pdPASS != result)
         {
@@ -152,14 +152,19 @@ void app_main(void)
 
 void hmi_task(void * pvParameters)
 {
-    static const TickType_t FEEDBACK_RECEIVE_TIMEOUT_TICKS = pdMS_TO_TICKS(100u);
+    static const TickType_t FEEDBACK_RECEIVE_TIMEOUT_TICKS = pdMS_TO_TICKS(10u);
     static const TickType_t BUZZER_CONTROL_TIMEOUT_TICKS = pdMS_TO_TICKS(100u);
+
+    static const uint32_t MAX_FEEDBACK_EVENT_RECEIVE_COUNT = 10ul;
 
     BaseType_t result;
     esp_err_t status;
     QueueHandle_t feedback_event_queue;
     EventBits_t power_save_events;
+    uint32_t feedback_event_receive_remaining;
+
     feedback_event_t * feedback_event;
+    feedback_event_t * max_priority_feedback_event;
 
     status = ESP_OK;
 
@@ -183,54 +188,67 @@ void hmi_task(void * pvParameters)
 
     while (1)
     {
-        if (NULL != feedback_event_queue)
+        feedback_event_receive_remaining = MAX_FEEDBACK_EVENT_RECEIVE_COUNT;
+        max_priority_feedback_event = NULL;
+
+        do 
         {
             result = xQueueReceive(feedback_event_queue, (void * const) &feedback_event, FEEDBACK_RECEIVE_TIMEOUT_TICKS);
 
-            if (pdTRUE == result)
+            if (pdTRUE == result && NULL != feedback_event)
             {
-                if (NULL != feedback_event)
+                if (NULL != max_priority_feedback_event)
                 {
-                    ESP_LOGI(TAG, "HMI feedback event - ID = %hhu, src = %hhu, priority = %hhu", (uint8_t) feedback_event->id, (uint8_t) feedback_event->source, (uint8_t) feedback_event->priority);
-
-                    status = hmi_buzzer_play_feedback_sequence(feedback_event->id, BUZZER_CONTROL_TIMEOUT_TICKS);
-
-                    if (ESP_OK != status)
+                    if (FEEDBACK_EVENT_NONE != feedback_event->id && feedback_event->priority >= max_priority_feedback_event->priority)
                     {
-                        ESP_LOGE(TAG, "Buzzer control error (%s)", esp_err_to_name(status));
+                        free(max_priority_feedback_event);
+                        max_priority_feedback_event = feedback_event;
                     }
-
-                    free(feedback_event);
-                    feedback_event = NULL;
+                    else
+                    {
+                        free(feedback_event);
+                        feedback_event = NULL;
+                    }
                 }
                 else
                 {
-                    ESP_LOGW(TAG, "HMI task received feedback event with no payload");
+                    max_priority_feedback_event = feedback_event;
                 }
             }
-            else
+        } while (pdTRUE == result && feedback_event_receive_remaining--);
+
+        if (NULL != max_priority_feedback_event)
+        {
+            ESP_LOGI(TAG, "HMI feedback event - ID = %hhu, src = %hhu, priority = %hhu", (uint8_t) max_priority_feedback_event->id, (uint8_t) max_priority_feedback_event->source, (uint8_t) max_priority_feedback_event->priority);
+
+            status = hmi_buzzer_play_feedback_sequence(max_priority_feedback_event->id, BUZZER_CONTROL_TIMEOUT_TICKS);
+
+            if (ESP_OK != status)
             {
-                ESP_LOGD(TAG, "HMI task received no feedback events");
+                ESP_LOGE(TAG, "Buzzer control error (%s)", esp_err_to_name(status));
             }
 
-            status = power_save_events_pending(&power_save_events);
+            free(max_priority_feedback_event);
+            max_priority_feedback_event = NULL;
+        }
 
-            if (ESP_OK == status)
+        status = power_save_events_pending(&power_save_events);
+
+        if (ESP_OK == status)
+        {
+            if (POWER_SAVE_EVT_ENTER & power_save_events)
             {
-                if (POWER_SAVE_EVT_ENTER & power_save_events)
+                status = hmi_feedback_event_send(FEEDBACK_EVENT_PWR_SAVE_ENTER, FEEDBACK_SOURCE_SYSTEM, FEEDBACK_PRIORITY_HIGH, (TickType_t) 0);
+
+                if (ESP_OK != status)
                 {
-                    status = hmi_feedback_event_send(FEEDBACK_EVENT_PWR_SAVE_ENTER, FEEDBACK_SOURCE_SYSTEM, FEEDBACK_PRIORITY_HIGH, (TickType_t) 0);
-
-                    if (ESP_OK != status)
-                    {
-                        ESP_LOGE(TAG, "Power off feedback send fail (%s)", esp_err_to_name(status));
-                    }
+                    ESP_LOGE(TAG, "Power off feedback send fail (%s)", esp_err_to_name(status));
                 }
             }
-            else
-            {
-                ESP_LOGW(TAG, "HMI task check power save events fail (%s)", esp_err_to_name(status));
-            }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "HMI task check power save events fail (%s)", esp_err_to_name(status));
         }
     }
 
@@ -252,6 +270,7 @@ void proximity_task(void * pvParameters)
 
     esp_err_t status;
     BaseType_t queue_result;
+    UBaseType_t last_feedback_event_was_error;
     UBaseType_t notify_level;
 
     status = ESP_OK;
@@ -284,6 +303,7 @@ void proximity_task(void * pvParameters)
     }
 
     notify_level = 0u;
+    last_feedback_event_was_error = pdFALSE;
 
     while (1)
     {
@@ -320,6 +340,7 @@ void proximity_task(void * pvParameters)
                             if (ESP_OK == status)
                             {
                                 notify_level = 2u;
+                                last_feedback_event_was_error = pdFALSE;
                             }
                             else
                             {
@@ -338,6 +359,7 @@ void proximity_task(void * pvParameters)
                         if (ESP_OK == status)
                         {
                             notify_level = 1u;
+                            last_feedback_event_was_error = pdFALSE;
                         }
                         else
                         {
@@ -352,6 +374,7 @@ void proximity_task(void * pvParameters)
                     if (ESP_OK == status)
                     {
                         notify_level = 0u;
+                        last_feedback_event_was_error = pdFALSE;
                     }
                     else
                     {
@@ -359,11 +382,15 @@ void proximity_task(void * pvParameters)
                     }
                 }
             }
-            else
+            else if (pdFALSE == last_feedback_event_was_error)
             {
                 status = hmi_feedback_event_send(FEEDBACK_EVENT_SENSOR_ERROR, FEEDBACK_SOURCE_PROXIMITY, FEEDBACK_PRIORITY_NORMAL, SEND_FEEDBACK_EVENT_TIMEOUT_TICKS);
 
-                if (ESP_OK != status)
+                if (ESP_OK == status)
+                {
+                    last_feedback_event_was_error = pdTRUE;
+                }
+                else
                 {
                     ESP_LOGW(TAG, "Send feedback event fail (%s)", esp_err_to_name(status));
                 }
